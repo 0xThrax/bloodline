@@ -3,11 +3,15 @@ use bracket_core::{
 };
 
 /// Entrant ids are `100 + seed`.
-fn setup(count: u64) -> Setup {
+fn setup_with(format: Format, count: u64) -> Setup {
     Setup {
-        format: Format::SingleElimination,
+        format,
         entrants: (1..=count).map(|seed| EntrantId(100 + seed)).collect(),
     }
+}
+
+fn setup(count: u64) -> Setup {
+    setup_with(Format::SingleElimination, count)
 }
 
 fn report(match_id: u32, winner: Side) -> Command {
@@ -38,9 +42,22 @@ fn slot_filled(match_id: u32, side: Side, entrant: u64) -> Event {
     }
 }
 
+fn completed(champion: u64) -> Event {
+    Event::Completed {
+        champion: EntrantId(champion),
+    }
+}
+
 /// Runs `commands` on a new tournament and returns it with every event.
 fn run(count: u64, commands: impl IntoIterator<Item = Command>) -> (Tournament, Vec<Event>) {
-    let (mut tournament, mut events) = Tournament::create(setup(count)).unwrap();
+    run_setup(setup(count), commands)
+}
+
+fn run_setup(
+    setup: Setup,
+    commands: impl IntoIterator<Item = Command>,
+) -> (Tournament, Vec<Event>) {
+    let (mut tournament, mut events) = Tournament::create(setup).unwrap();
     for command in commands {
         events.extend(tournament.execute(command).unwrap());
     }
@@ -215,6 +232,114 @@ fn invalid_log() {
         (
             "Completed twice",
             [&events[..], &events[events.len() - 1..]].concat(),
+        ),
+    ];
+    for (case, log) in invalid {
+        assert_eq!(Tournament::replay(log), Err(Error::InvalidLog), "{case}");
+    }
+}
+
+/// A two-entrant double elimination tournament after its winners final, which
+/// seed 1 won. Match 1 is the grand final and match 2 is the reset.
+fn double_at_grand_final() -> Tournament {
+    let (mut tournament, _) = Tournament::create(setup_with(Format::DoubleElimination, 2)).unwrap();
+    assert_eq!(
+        tournament.execute(report(0, Side::A)).unwrap(),
+        [
+            result_reported(0, Side::A),
+            slot_filled(1, Side::A, 101),
+            slot_filled(1, Side::B, 102),
+        ]
+    );
+    tournament
+}
+
+#[test]
+fn side_a_wins_the_grand_final() {
+    let mut tournament = double_at_grand_final();
+    assert_eq!(
+        tournament.execute(report(1, Side::A)).unwrap(),
+        [result_reported(1, Side::A), completed(101)]
+    );
+    assert_eq!(
+        tournament.status(),
+        Status::Complete {
+            champion: EntrantId(101)
+        }
+    );
+    let reset = tournament.get(MatchId(2)).unwrap();
+    assert!(!reset.is_ready());
+    assert_eq!(
+        tournament.execute(report(2, Side::A)),
+        Err(Error::MatchNotReady(MatchId(2)))
+    );
+}
+
+#[test]
+fn side_b_wins_the_grand_final_and_the_reset() {
+    let mut tournament = double_at_grand_final();
+    assert_eq!(
+        tournament.execute(report(1, Side::B)).unwrap(),
+        [
+            result_reported(1, Side::B),
+            slot_filled(2, Side::B, 102),
+            slot_filled(2, Side::A, 101),
+        ]
+    );
+    assert_eq!(tournament.status(), Status::InProgress);
+    assert!(tournament.get(MatchId(2)).unwrap().is_ready());
+    assert_eq!(
+        tournament.execute(report(2, Side::B)).unwrap(),
+        [result_reported(2, Side::B), completed(102)]
+    );
+    assert_eq!(
+        tournament.status(),
+        Status::Complete {
+            champion: EntrantId(102)
+        }
+    );
+}
+
+#[test]
+fn losers_drop_into_the_losers_bracket() {
+    let (tournament, events) = run_setup(
+        setup_with(Format::DoubleElimination, 4),
+        [report(0, Side::B), report(1, Side::A)],
+    );
+    assert_eq!(
+        events[1..],
+        [
+            result_reported(0, Side::B),
+            slot_filled(2, Side::A, 104),
+            slot_filled(3, Side::A, 101),
+            result_reported(1, Side::A),
+            slot_filled(2, Side::B, 102),
+            slot_filled(3, Side::B, 103),
+        ]
+    );
+    assert!(tournament.get(MatchId(3)).unwrap().is_ready());
+    assert_eq!(Tournament::replay(events), Ok(tournament));
+}
+
+#[test]
+fn invalid_double_elimination_log() {
+    let (_, events) = run_setup(
+        setup_with(Format::DoubleElimination, 2),
+        [report(0, Side::A), report(1, Side::B), report(2, Side::A)],
+    );
+    let invalid: Vec<(&str, Vec<Event>)> = vec![
+        ("loser does not move", events[..3].to_vec()),
+        (
+            "loser moves before the winner",
+            [&events[..2], &[events[3].clone(), events[2].clone()]].concat(),
+        ),
+        (
+            "grand final won by side B completes",
+            [&events[..5], &[completed(102)]].concat(),
+        ),
+        (
+            "extra event after the reset",
+            [&events[..], &[slot_filled(2, Side::A, 101)]].concat(),
         ),
     ];
     for (case, log) in invalid {

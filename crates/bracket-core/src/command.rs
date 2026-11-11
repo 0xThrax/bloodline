@@ -40,9 +40,10 @@ pub enum Event {
         /// The entrant now in the slot.
         entrant: EntrantId,
     },
-    /// The final got its result.
+    /// A result ended the tournament: the result of the final in single
+    /// elimination, or of the grand final or the reset in double elimination.
     Completed {
-        /// The winner of the final.
+        /// The winner of the match that ended the tournament.
         champion: EntrantId,
     },
 }
