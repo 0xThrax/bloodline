@@ -26,6 +26,15 @@ cargo test --workspace --all-features
 
 Work on one roadmap phase at a time, from its tracking issue. Do not build ahead: no types, parameters, or modules for later phases. When a phase lands, tick it in `ARCHITECTURE.md` in the same pull request.
 
+## Handoff between sessions
+
+A phase can take more than one session and more than one pull request. The tracking issue holds the state between sessions.
+
+- Before you start, read the tracking issue and all of its comments. The newest `## Handoff` comment lists the steps, the decisions that change the spec, and the next step.
+- Do only the next step from that comment.
+- When your pull request is open, post a new `## Handoff` comment on the issue. Use the same format as the last one: tick your step and link the pull request, keep the decisions current, and describe the next step.
+- If there is no `## Handoff` comment, split the phase into steps that are one pull request each. Post the first `## Handoff` comment before you start.
+
 ## What belongs in the repository
 
 This is a public project. Commit only what a contributor needs.
