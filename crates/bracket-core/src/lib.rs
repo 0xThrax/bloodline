@@ -15,6 +15,6 @@ mod tournament;
 pub use command::{Command, Event};
 pub use error::Error;
 pub use model::{
-    EntrantId, Format, Match, MatchId, MatchResult, Setup, Side, Slot, Source, Status,
+    Bracket, EntrantId, Format, Match, MatchId, MatchResult, Setup, Side, Slot, Source, Status,
 };
 pub use tournament::Tournament;

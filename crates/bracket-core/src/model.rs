@@ -46,6 +46,19 @@ pub struct Setup {
     pub entrants: Vec<EntrantId>,
 }
 
+/// A part of a tournament that holds its own sequence of rounds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[non_exhaustive]
+pub enum Bracket {
+    /// The main bracket. Every single elimination match is here.
+    Winners,
+    /// The bracket that losers of winners bracket matches drop into.
+    Losers,
+    /// The final between the winners and losers brackets.
+    GrandFinal,
+}
+
 /// Where the entrant of a slot comes from.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -92,6 +105,7 @@ pub struct MatchResult {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Match {
     pub(crate) id: MatchId,
+    pub(crate) bracket: Bracket,
     pub(crate) round: u32,
     pub(crate) position: u32,
     pub(crate) slots: [Slot; 2],
@@ -104,12 +118,18 @@ impl Match {
         self.id
     }
 
-    /// The 1-based round of this match. The final is in the last round.
+    /// The bracket this match belongs to.
+    pub fn bracket(&self) -> Bracket {
+        self.bracket
+    }
+
+    /// The 1-based round of this match within its bracket.
     pub fn round(&self) -> u32 {
         self.round
     }
 
-    /// The 0-based position of this match within its round, from top to bottom.
+    /// The 0-based position of this match within its round and bracket, from
+    /// top to bottom.
     ///
     /// Positions count every place in the full power-of-two bracket, so a
     /// round 1 pairing that is a bye leaves a gap.

@@ -1,4 +1,4 @@
-use bracket_core::{EntrantId, Error, Format, MatchId, Setup, Source, Status, Tournament};
+use bracket_core::{Bracket, EntrantId, Error, Format, MatchId, Setup, Source, Status, Tournament};
 
 fn setup(entrants: impl IntoIterator<Item = u64>) -> Setup {
     Setup {
@@ -21,15 +21,18 @@ fn winner(id: u32) -> Source {
     Source::Winner(MatchId(id))
 }
 
-/// Checks ids, rounds, positions, sources, and seed slot entrants.
+/// Checks ids, brackets, rounds, positions, sources, and seed slot entrants.
 fn assert_graph(tournament: &Tournament, round_count: u32, expected: &[(u32, u32, [Source; 2])]) {
-    assert_eq!(tournament.round_count(), round_count);
+    assert_eq!(tournament.round_count(Bracket::Winners), round_count);
+    assert_eq!(tournament.round_count(Bracket::Losers), 0);
+    assert_eq!(tournament.round_count(Bracket::GrandFinal), 0);
     let actual: Vec<_> = tournament
         .matches()
         .iter()
         .enumerate()
         .map(|(index, m)| {
             assert_eq!(m.id(), MatchId(index as u32));
+            assert_eq!(m.bracket(), Bracket::Winners);
             assert!(m.result().is_none());
             for slot in m.slots() {
                 let entrant = match slot.source() {

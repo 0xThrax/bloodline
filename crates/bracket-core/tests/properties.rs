@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use bracket_core::{
-    Command, EntrantId, Event, Format, MatchId, MatchResult, Setup, Side, Source, Status,
+    Bracket, Command, EntrantId, Event, Format, MatchId, MatchResult, Setup, Side, Source, Status,
     Tournament,
 };
 use proptest::prelude::*;
@@ -137,7 +137,10 @@ proptest! {
             }
         }
         let last = matches.len() - 1;
-        prop_assert_eq!(matches[last].round(), tournament.round_count());
+        prop_assert!(matches.iter().all(|m| m.bracket() == Bracket::Winners));
+        prop_assert_eq!(matches[last].round(), tournament.round_count(Bracket::Winners));
+        prop_assert_eq!(tournament.round_count(Bracket::Losers), 0);
+        prop_assert_eq!(tournament.round_count(Bracket::GrandFinal), 0);
         prop_assert_eq!(fed[last], 0);
         prop_assert!(fed[..last].iter().all(|&count| count == 1));
     }

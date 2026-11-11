@@ -2,8 +2,8 @@ use std::collections::BTreeSet;
 
 use crate::graph::{self, MAX_ENTRANTS};
 use crate::{
-    Command, EntrantId, Error, Event, Format, Match, MatchId, MatchResult, Setup, Side, Source,
-    Status,
+    Bracket, Command, EntrantId, Error, Event, Format, Match, MatchId, MatchResult, Setup, Side,
+    Source, Status,
 };
 
 /// A tournament: its setup and the current state of every match.
@@ -12,7 +12,6 @@ use crate::{
 pub struct Tournament {
     setup: Setup,
     matches: Vec<Match>,
-    round_count: u32,
 }
 
 impl Tournament {
@@ -29,17 +28,13 @@ impl Tournament {
     /// [`Error::DuplicateEntrant`] for the first entrant listed twice.
     pub fn create(setup: Setup) -> Result<(Self, Vec<Event>), Error> {
         validate(&setup)?;
-        let (matches, round_count) = match setup.format {
+        let matches = match setup.format {
             Format::SingleElimination => graph::single_elimination(&setup.entrants),
         };
         let event = Event::Created {
             setup: setup.clone(),
         };
-        let tournament = Self {
-            setup,
-            matches,
-            round_count,
-        };
+        let tournament = Self { setup, matches };
         Ok((tournament, vec![event]))
     }
 
@@ -123,9 +118,17 @@ impl Tournament {
         self.matches.get(usize::try_from(id.0).ok()?)
     }
 
-    /// The number of rounds. The final is in the last round.
-    pub fn round_count(&self) -> u32 {
-        self.round_count
+    /// The number of rounds in `bracket`, or 0 if the tournament has no
+    /// match in it.
+    ///
+    /// Rounds are numbered as in the full power-of-two bracket, so this is
+    /// the round of the last match in `bracket`.
+    pub fn round_count(&self, bracket: Bracket) -> u32 {
+        self.matches
+            .iter()
+            .rev()
+            .find(|m| m.bracket == bracket)
+            .map_or(0, |m| m.round)
     }
 
     /// Whether the tournament has a champion.
@@ -164,18 +167,16 @@ impl Tournament {
 
     /// The slot the winner of `from` moves into, or `None` for the final.
     fn winner_slot(&self, from: &Match) -> Option<(MatchId, Side)> {
-        let key = (from.round.checked_add(1)?, from.position / 2);
-        let index = self
-            .matches
-            .binary_search_by_key(&key, |m| (m.round, m.position))
-            .ok()?;
-        let side = if from.position.is_multiple_of(2) {
-            Side::A
-        } else {
-            Side::B
-        };
-        let to = &self.matches[index];
-        (to.slots[side.index()].source == Source::Winner(from.id)).then_some((to.id, side))
+        let source = Source::Winner(from.id);
+        // A slot is always fed by an earlier match, so search only later ones.
+        let later = self.matches.get(usize::try_from(from.id.0).ok()? + 1..)?;
+        later.iter().find_map(|m| {
+            m.slots
+                .iter()
+                .zip([Side::A, Side::B])
+                .find(|(slot, _)| slot.source == source)
+                .map(|(_, side)| (m.id, side))
+        })
     }
 
     /// The match that feeds this slot, if the slot exists and a match feeds it.
