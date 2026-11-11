@@ -34,6 +34,13 @@ impl Side {
 pub enum Format {
     /// Each match eliminates its loser. The winner of the final is the champion.
     SingleElimination,
+    /// Each entrant is eliminated after two losses.
+    ///
+    /// The losers of winners bracket matches drop into the losers bracket.
+    /// The grand final puts the winners bracket champion on side A against
+    /// the losers bracket champion on side B. If side B wins, the two meet
+    /// again in a reset, and the winner of the reset is the champion.
+    DoubleElimination,
 }
 
 /// Everything needed to create a tournament.
@@ -68,6 +75,8 @@ pub enum Source {
     Seed(u32),
     /// The winner of this match.
     Winner(MatchId),
+    /// The loser of this match.
+    Loser(MatchId),
 }
 
 /// One side of a match: where its entrant comes from, and the entrant once known.
@@ -131,8 +140,8 @@ impl Match {
     /// The 0-based position of this match within its round and bracket, from
     /// top to bottom.
     ///
-    /// Positions count every place in the full power-of-two bracket, so a
-    /// round 1 pairing that is a bye leaves a gap.
+    /// Positions count every match of the full power-of-two bracket, so a
+    /// match removed for a bye leaves a gap.
     pub fn position(&self) -> u32 {
         self.position
     }
@@ -161,11 +170,11 @@ impl Match {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Status {
-    /// The final has no result yet.
+    /// No result has ended the tournament yet.
     InProgress,
-    /// The final has a result.
+    /// A result has ended the tournament.
     Complete {
-        /// The winner of the final.
+        /// The winner of the match that ended the tournament.
         champion: EntrantId,
     },
 }

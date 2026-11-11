@@ -2,8 +2,8 @@ use std::collections::BTreeSet;
 
 use crate::graph::{self, MAX_ENTRANTS};
 use crate::{
-    Bracket, Command, EntrantId, Error, Event, Format, Match, MatchId, MatchResult, Setup, Side,
-    Source, Status,
+    Bracket, Command, Error, Event, Format, Match, MatchId, MatchResult, Setup, Side, Source,
+    Status,
 };
 
 /// A tournament: its setup and the current state of every match.
@@ -30,6 +30,7 @@ impl Tournament {
         validate(&setup)?;
         let matches = match setup.format {
             Format::SingleElimination => graph::single_elimination(&setup.entrants),
+            Format::DoubleElimination => graph::double_elimination(&setup.entrants),
         };
         let event = Event::Created {
             setup: setup.clone(),
@@ -41,8 +42,14 @@ impl Tournament {
     /// Executes `command` and returns the events that describe the change.
     ///
     /// [`Command::ReportResult`] returns [`Event::ResultReported`], then
-    /// [`Event::SlotFilled`] for the slot the winner moves into, or
-    /// [`Event::Completed`] if the match was the final.
+    /// [`Event::SlotFilled`] for the slot the winner moves into, then
+    /// [`Event::SlotFilled`] for the slot the loser moves into. A slot event
+    /// is left out if no slot takes that entrant. If the result ends the
+    /// tournament, neither entrant moves and [`Event::Completed`] comes last.
+    ///
+    /// The final ends a single elimination tournament. A double elimination
+    /// tournament ends when side A wins the grand final, or else when the
+    /// reset gets its result.
     ///
     /// # Errors
     ///
@@ -55,52 +62,43 @@ impl Tournament {
             Command::ReportResult { match_id, result } => self.report_result(match_id, result)?,
         };
         for event in &events {
-            self.apply(event)?;
+            self.apply(event);
         }
         Ok(events)
     }
 
     /// Rebuilds a tournament from its events, oldest first.
     ///
-    /// The events are applied as recorded. Each must be valid for the state
-    /// the events before it produce.
+    /// Each reported result runs again as a command on the state that the
+    /// events before it produce.
     ///
     /// # Errors
     ///
     /// Returns [`Error::InvalidLog`] if the first event is not
-    /// [`Event::Created`] with a valid setup, if an event cannot apply to the
-    /// current state, or if a reported result is not followed by the
-    /// [`Event::SlotFilled`] or [`Event::Completed`] that moves its winner.
+    /// [`Event::Created`] with a valid setup, if a reported result is not
+    /// valid for the current state, or if a reported result is not followed
+    /// by exactly the events that [`Tournament::execute`] returns with it.
     pub fn replay(events: impl IntoIterator<Item = Event>) -> Result<Self, Error> {
         let mut events = events.into_iter();
         let mut tournament = match events.next() {
             Some(Event::Created { setup }) => Self::create(setup).map_err(|_| Error::InvalidLog)?.0,
             _ => return Err(Error::InvalidLog),
         };
-        // The match whose result was reported and whose winner has not moved yet.
-        let mut unmoved: Option<MatchId> = None;
-        for event in events {
-            let expected = match &event {
-                Event::ResultReported { .. } => None,
-                Event::SlotFilled { match_id, side, .. } => {
-                    tournament.slot_source(*match_id, *side)
-                }
-                Event::Completed { .. } => tournament.matches.last().map(|last| last.id),
-                Event::Created { .. } => return Err(Error::InvalidLog),
-            };
-            if unmoved != expected {
+        while let Some(event) = events.next() {
+            let Event::ResultReported { match_id, result } = event else {
                 return Err(Error::InvalidLog);
-            }
-            tournament.apply(&event).map_err(|_| Error::InvalidLog)?;
-            unmoved = match event {
-                Event::ResultReported { match_id, .. } => Some(match_id),
-                _ => None,
             };
+            let produced = tournament
+                .execute(Command::ReportResult { match_id, result })
+                .map_err(|_| Error::InvalidLog)?;
+            // The first produced event is the `ResultReported` just read.
+            for expected in produced.into_iter().skip(1) {
+                if events.next() != Some(expected) {
+                    return Err(Error::InvalidLog);
+                }
+            }
         }
-        match unmoved {
-            None => Ok(tournament),
-            Some(_) => Err(Error::InvalidLog),
-        }
+        Ok(tournament)
     }
 
     /// The setup this tournament was created from.
@@ -133,10 +131,19 @@ impl Tournament {
 
     /// Whether the tournament has a champion.
     pub fn status(&self) -> Status {
-        match self.matches.last().and_then(Match::winner) {
-            Some(champion) => Status::Complete { champion },
-            None => Status::InProgress,
-        }
+        // Only the last match, or the grand final just before the reset, can
+        // end a tournament.
+        self.matches
+            .iter()
+            .rev()
+            .take(2)
+            .find(|m| {
+                m.result
+                    .as_ref()
+                    .is_some_and(|result| self.ends_tournament(m, result.winner))
+            })
+            .and_then(Match::winner)
+            .map_or(Status::InProgress, |champion| Status::Complete { champion })
     }
 
     fn report_result(&self, id: MatchId, result: MatchResult) -> Result<Vec<Event>, Error> {
@@ -144,95 +151,88 @@ impl Tournament {
         if reported.result.is_some() {
             return Err(Error::MatchAlreadyComplete(id));
         }
-        let winner = reported.slots[result.winner.index()]
-            .entrant
-            .filter(|_| reported.is_ready())
-            .ok_or(Error::MatchNotReady(id))?;
-        let moved = match self.winner_slot(reported) {
-            Some((match_id, side)) => Event::SlotFilled {
-                match_id,
-                side,
-                entrant: winner,
-            },
-            None => Event::Completed { champion: winner },
+        let [Some(a), Some(b)] = reported.slots.each_ref().map(|slot| slot.entrant) else {
+            return Err(Error::MatchNotReady(id));
         };
-        Ok(vec![
-            Event::ResultReported {
-                match_id: id,
-                result,
-            },
-            moved,
-        ])
+        let (winner, loser) = match result.winner {
+            Side::A => (a, b),
+            Side::B => (b, a),
+        };
+        let ends = self.ends_tournament(reported, result.winner);
+        let mut events = vec![Event::ResultReported {
+            match_id: id,
+            result,
+        }];
+        if ends {
+            events.push(Event::Completed { champion: winner });
+            return Ok(events);
+        }
+        let moves = [(Source::Winner(id), winner), (Source::Loser(id), loser)];
+        for (source, entrant) in moves {
+            if let Some((match_id, side)) = self.slot_fed_by(&source) {
+                events.push(Event::SlotFilled {
+                    match_id,
+                    side,
+                    entrant,
+                });
+            }
+        }
+        Ok(events)
     }
 
-    /// The slot the winner of `from` moves into, or `None` for the final.
-    fn winner_slot(&self, from: &Match) -> Option<(MatchId, Side)> {
-        let source = Source::Winner(from.id);
+    /// Whether a win for `winner` in `reported` ends the tournament.
+    ///
+    /// Side A of the grand final comes from the winners bracket and has not
+    /// lost yet, so a win for side A ends the tournament before the reset.
+    fn ends_tournament(&self, reported: &Match, winner: Side) -> bool {
+        let is_last = self
+            .matches
+            .last()
+            .is_some_and(|last| last.id == reported.id);
+        let is_grand_final = reported.bracket == Bracket::GrandFinal && reported.round == 1;
+        is_last || (is_grand_final && winner == Side::A)
+    }
+
+    /// The slot that takes the entrant of `source`, if any.
+    fn slot_fed_by(&self, source: &Source) -> Option<(MatchId, Side)> {
+        let from = match source {
+            Source::Winner(id) | Source::Loser(id) => *id,
+            Source::Seed(_) => return None,
+        };
         // A slot is always fed by an earlier match, so search only later ones.
-        let later = self.matches.get(usize::try_from(from.id.0).ok()? + 1..)?;
+        let later = self.matches.get(usize::try_from(from.0).ok()? + 1..)?;
         later.iter().find_map(|m| {
             m.slots
                 .iter()
                 .zip([Side::A, Side::B])
-                .find(|(slot, _)| slot.source == source)
+                .find(|(slot, _)| slot.source == *source)
                 .map(|(_, side)| (m.id, side))
         })
     }
 
-    /// The match that feeds this slot, if the slot exists and a match feeds it.
-    fn slot_source(&self, id: MatchId, side: Side) -> Option<MatchId> {
-        match self.get(id)?.slots[side.index()].source {
-            Source::Winner(source) => Some(source),
-            Source::Seed(_) => None,
-        }
-    }
-
-    /// Applies one event after `Created`. On an error the tournament is unchanged.
-    fn apply(&mut self, event: &Event) -> Result<(), Error> {
+    /// Applies one event that `report_result` returned.
+    fn apply(&mut self, event: &Event) {
         match event {
             Event::ResultReported { match_id, result } => {
-                let reported = self.get_mut(*match_id)?;
-                if !reported.is_ready() {
-                    return Err(Error::InvalidLog);
+                if let Some(reported) = self.get_mut(*match_id) {
+                    reported.result = Some(result.clone());
                 }
-                reported.result = Some(result.clone());
             }
             Event::SlotFilled {
                 match_id,
                 side,
                 entrant,
             } => {
-                let source = self
-                    .slot_source(*match_id, *side)
-                    .ok_or(Error::InvalidLog)?;
-                self.check_winner(source, *entrant)?;
-                let slot = &mut self.get_mut(*match_id)?.slots[side.index()];
-                if slot.entrant.is_some() {
-                    return Err(Error::InvalidLog);
+                if let Some(filled) = self.get_mut(*match_id) {
+                    filled.slots[side.index()].entrant = Some(*entrant);
                 }
-                slot.entrant = Some(*entrant);
             }
-            Event::Completed { champion } => {
-                let last = self.matches.last().ok_or(Error::InvalidLog)?.id;
-                self.check_winner(last, *champion)?;
-            }
-            Event::Created { .. } => return Err(Error::InvalidLog),
-        }
-        Ok(())
-    }
-
-    fn check_winner(&self, id: MatchId, entrant: EntrantId) -> Result<(), Error> {
-        match self.get(id).and_then(Match::winner) {
-            Some(winner) if winner == entrant => Ok(()),
-            _ => Err(Error::InvalidLog),
+            Event::Completed { .. } | Event::Created { .. } => {}
         }
     }
 
-    fn get_mut(&mut self, id: MatchId) -> Result<&mut Match, Error> {
-        usize::try_from(id.0)
-            .ok()
-            .and_then(|index| self.matches.get_mut(index))
-            .ok_or(Error::InvalidLog)
+    fn get_mut(&mut self, id: MatchId) -> Option<&mut Match> {
+        self.matches.get_mut(usize::try_from(id.0).ok()?)
     }
 }
 
