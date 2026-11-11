@@ -1,0 +1,8 @@
+[package]
+name = "bracket-core"
+version = "0.0.0"
+description = "Pure, deterministic tournament bracket engine"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
