@@ -1,4 +1,4 @@
-use crate::{EntrantId, Match, MatchId, Slot, Source};
+use crate::{Bracket, EntrantId, Match, MatchId, Slot, Source};
 
 /// The largest entrant count. Its bracket size, 2^31, still fits in a `u32`.
 pub(crate) const MAX_ENTRANTS: u32 = 1 << 31;
@@ -17,23 +17,29 @@ pub(crate) fn seed_order(size: u32) -> Vec<u32> {
     order
 }
 
-/// Builds the single elimination graph for `entrants`, in seed order.
+/// Builds the single elimination graph for `entrants`, in seed order, with
+/// the matches ordered by id. The caller guarantees
+/// `2 <= entrants.len() <= MAX_ENTRANTS`.
+pub(crate) fn single_elimination(entrants: &[EntrantId]) -> Vec<Match> {
+    let size = (entrants.len() as u32).next_power_of_two();
+    remove_byes(winners_bracket(size), entrants)
+}
+
+/// A match of the full graph, before byes are removed.
 ///
-/// Returns the matches, ordered by id, and the round count. The caller
-/// guarantees `2 <= entrants.len() <= MAX_ENTRANTS`.
-pub(crate) fn single_elimination(entrants: &[EntrantId]) -> (Vec<Match>, u32) {
-    let count = entrants.len() as u32;
-    let size = count.next_power_of_two();
+/// Its `Winner` sources hold indices into the full graph, not final ids.
+struct Planned {
+    bracket: Bracket,
+    round: u32,
+    position: u32,
+    sources: [Source; 2],
+}
 
-    // Each place in the current round holds the source that fills it. In
-    // round 1, `None` is a seed above the entrant count.
-    let mut places: Vec<Option<Source>> = seed_order(size)
-        .into_iter()
-        .map(|seed| (seed <= count).then_some(Source::Seed(seed)))
-        .collect();
-    let mut matches = Vec::new();
+/// The winners bracket for `size` entrants, a power of two, with no byes.
+fn winners_bracket(size: u32) -> Vec<Planned> {
+    let mut planned: Vec<Planned> = Vec::new();
+    let mut places: Vec<Source> = seed_order(size).into_iter().map(Source::Seed).collect();
     let mut round = 0;
-
     while places.len() > 1 {
         round += 1;
         places = places
@@ -41,37 +47,63 @@ pub(crate) fn single_elimination(entrants: &[EntrantId]) -> (Vec<Match>, u32) {
             .0
             .iter()
             .enumerate()
-            .map(|(position, pair)| match pair {
-                [Some(a), Some(b)] => {
-                    let id = MatchId(matches.len() as u32);
-                    matches.push(Match {
-                        id,
-                        round,
-                        position: position as u32,
-                        slots: [slot(a, entrants), slot(b, entrants)],
-                        result: None,
-                    });
-                    Some(Source::Winner(id))
-                }
-                // A bye: the present seed moves straight to the next round.
-                [Some(present), None] | [None, Some(present)] => Some(present.clone()),
-                _ => None,
+            .map(|(position, [a, b])| {
+                let index = MatchId(planned.len() as u32);
+                planned.push(Planned {
+                    bracket: Bracket::Winners,
+                    round,
+                    position: position as u32,
+                    sources: [a.clone(), b.clone()],
+                });
+                Source::Winner(index)
             })
             .collect();
     }
-
-    (matches, round)
+    planned
 }
 
-fn slot(source: &Source, entrants: &[EntrantId]) -> Slot {
+/// Removes every match of `planned` that lacks two entrants, and gives the
+/// rest dense ids in order.
+///
+/// `planned` is in id order, and each match refers only to earlier ones. A
+/// removed match passes its one present source on to the slot it fed.
+fn remove_byes(planned: Vec<Planned>, entrants: &[EntrantId]) -> Vec<Match> {
+    let count = entrants.len() as u32;
+    // For each planned match, the source of its winner after byes are removed.
+    let mut winners: Vec<Option<Source>> = Vec::with_capacity(planned.len());
+    let mut matches = Vec::new();
+    for plan in planned {
+        let present = plan.sources.map(|source| match source {
+            Source::Seed(seed) => (seed <= count).then_some(Source::Seed(seed)),
+            Source::Winner(index) => winners.get(index.0 as usize).cloned().flatten(),
+        });
+        let winner = match present {
+            [Some(a), Some(b)] => {
+                let id = MatchId(matches.len() as u32);
+                matches.push(Match {
+                    id,
+                    bracket: plan.bracket,
+                    round: plan.round,
+                    position: plan.position,
+                    slots: [slot(a, entrants), slot(b, entrants)],
+                    result: None,
+                });
+                Some(Source::Winner(id))
+            }
+            [Some(present), None] | [None, Some(present)] => Some(present),
+            [None, None] => None,
+        };
+        winners.push(winner);
+    }
+    matches
+}
+
+fn slot(source: Source, entrants: &[EntrantId]) -> Slot {
     let entrant = match source {
-        Source::Seed(seed) => entrants.get(*seed as usize - 1).copied(),
+        Source::Seed(seed) => entrants.get(seed as usize - 1).copied(),
         Source::Winner(_) => None,
     };
-    Slot {
-        source: source.clone(),
-        entrant,
-    }
+    Slot { source, entrant }
 }
 
 #[cfg(test)]
