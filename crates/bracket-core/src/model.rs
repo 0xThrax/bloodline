@@ -18,6 +18,15 @@ pub enum Side {
     B,
 }
 
+impl Side {
+    pub(crate) fn index(self) -> usize {
+        match self {
+            Side::A => 0,
+            Side::B => 1,
+        }
+    }
+}
+
 /// The structure of a tournament.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
@@ -121,6 +130,10 @@ impl Match {
     /// Whether both slots hold an entrant and the match has no result.
     pub fn is_ready(&self) -> bool {
         self.result.is_none() && self.slots.iter().all(|slot| slot.entrant.is_some())
+    }
+
+    pub(crate) fn winner(&self) -> Option<EntrantId> {
+        self.slots[self.result.as_ref()?.winner.index()].entrant
     }
 }
 

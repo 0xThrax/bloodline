@@ -35,7 +35,7 @@ On startup the server rebuilds each tournament by replaying its events.
 
 Each phase lands with its tests passing before the next begins.
 
-- [ ] 1. Single elimination: workspace, CI, match graph, seeding, byes, results, replay
+- [x] 1. Single elimination: workspace, CI, match graph, seeding, byes, results, replay
 - [ ] 2. Double elimination: losers bracket, grand final with reset
 - [ ] 3. Round robin: scheduling, standings, tiebreakers
 - [ ] 4. Combat sports formats: divisions, bronze match, repechage, same-team separation
