@@ -5,8 +5,9 @@ use crate::{EntrantId, MatchId};
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub enum Error {
-    /// The setup has fewer than two entrants.
-    #[error("a tournament needs at least two entrants")]
+    /// The setup has fewer entrants than its format needs: 2 for every
+    /// format, 4 for single elimination with [`Bronze::Match`](crate::Bronze::Match).
+    #[error("the setup has fewer entrants than its format needs")]
     TooFewEntrants,
     /// The setup has more entrants than its format allows: 2^31 for single
     /// and double elimination, 1024 for round robin.

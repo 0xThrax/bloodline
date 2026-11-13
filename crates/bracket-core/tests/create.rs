@@ -1,10 +1,12 @@
 use bracket_core::{
-    Bracket, EntrantId, Error, Format, MatchId, Points, Setup, Source, Status, Tournament,
+    Bracket, Bronze, EntrantId, Error, Format, MatchId, Points, Setup, Source, Status, Tournament,
 };
 
 fn setup(entrants: impl IntoIterator<Item = u64>) -> Setup {
     Setup {
-        format: Format::SingleElimination,
+        format: Format::SingleElimination {
+            bronze: Bronze::None,
+        },
         entrants: entrants.into_iter().map(EntrantId).collect(),
     }
 }
@@ -17,7 +19,12 @@ fn create_with(format: Format, count: u64) -> Tournament {
 }
 
 fn create(count: u64) -> Tournament {
-    create_with(Format::SingleElimination, count)
+    create_with(
+        Format::SingleElimination {
+            bronze: Bronze::None,
+        },
+        count,
+    )
 }
 
 fn seed(seed: u32) -> Source {
@@ -360,4 +367,71 @@ fn too_many_round_robin_entrants() {
         entrants: (0..1025).map(EntrantId).collect(),
     };
     assert_eq!(Tournament::create(setup), Err(Error::TooManyEntrants));
+}
+
+fn bronze_match() -> Format {
+    Format::SingleElimination {
+        bronze: Bronze::Match,
+    }
+}
+
+/// Checks a single elimination graph with a bronze match: `winners` in the
+/// winners bracket, then one bronze match between the semifinal losers.
+fn assert_bronze_graph(
+    count: u64,
+    round_count: u32,
+    winners: &[(u32, u32, [Source; 2])],
+    semifinals: [u32; 2],
+) {
+    let tournament = create_with(bronze_match(), count);
+    assert_eq!(tournament.round_count(Bracket::Winners), round_count);
+    assert_eq!(tournament.round_count(Bracket::Bronze), 1);
+    let mut expected: Vec<_> = winners
+        .iter()
+        .map(|(round, position, sources)| (Bracket::Winners, *round, *position, sources.clone()))
+        .collect();
+    expected.push((Bracket::Bronze, 1, 0, semifinals.map(loser)));
+    assert_eq!(graph(&tournament), expected);
+}
+
+#[test]
+fn bronze_graph_for_4_entrants() {
+    assert_bronze_graph(
+        4,
+        2,
+        &[
+            (1, 0, [seed(1), seed(4)]),
+            (1, 1, [seed(2), seed(3)]),
+            (2, 0, [winner(0), winner(1)]),
+        ],
+        [0, 1],
+    );
+}
+
+#[test]
+fn bronze_graph_for_8_entrants() {
+    assert_bronze_graph(
+        8,
+        3,
+        &[
+            (1, 0, [seed(1), seed(8)]),
+            (1, 1, [seed(4), seed(5)]),
+            (1, 2, [seed(2), seed(7)]),
+            (1, 3, [seed(3), seed(6)]),
+            (2, 0, [winner(0), winner(1)]),
+            (2, 1, [winner(2), winner(3)]),
+            (3, 0, [winner(4), winner(5)]),
+        ],
+        [4, 5],
+    );
+}
+
+#[test]
+fn bronze_match_needs_4_entrants() {
+    let setup = |count: u64| Setup {
+        format: bronze_match(),
+        entrants: (1..=count).map(EntrantId).collect(),
+    };
+    assert_eq!(Tournament::create(setup(3)), Err(Error::TooFewEntrants));
+    assert!(Tournament::create(setup(4)).is_ok());
 }

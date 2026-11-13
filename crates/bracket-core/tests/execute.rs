@@ -1,6 +1,6 @@
 use bracket_core::{
-    Command, EntrantId, Error, Event, Format, MatchId, MatchResult, Points, Setup, Side, Status,
-    Tournament,
+    Bronze, Command, EntrantId, Error, Event, Format, MatchId, MatchResult, Points, Setup, Side,
+    Status, Tournament,
 };
 
 /// Entrant ids are `100 + seed`.
@@ -12,7 +12,12 @@ fn setup_with(format: Format, count: u64) -> Setup {
 }
 
 fn setup(count: u64) -> Setup {
-    setup_with(Format::SingleElimination, count)
+    setup_with(
+        Format::SingleElimination {
+            bronze: Bronze::None,
+        },
+        count,
+    )
 }
 
 fn report(match_id: u32, winner: Side) -> Command {
@@ -267,7 +272,9 @@ fn invalid_log() {
             "invalid setup",
             vec![Event::Created {
                 setup: Setup {
-                    format: Format::SingleElimination,
+                    format: Format::SingleElimination {
+                        bronze: Bronze::None,
+                    },
                     entrants: vec![EntrantId(1)],
                 },
             }],
@@ -458,4 +465,71 @@ fn invalid_double_elimination_log() {
     for (case, log) in invalid {
         assert_eq!(Tournament::replay(log), Err(Error::InvalidLog), "{case}");
     }
+}
+
+/// A four-entrant single elimination tournament with a bronze match, after
+/// both semifinals, which seeds 1 and 2 won. Match 2 is the final and match 3
+/// is the bronze match.
+fn bronze_at_finals() -> Tournament {
+    let format = Format::SingleElimination {
+        bronze: Bronze::Match,
+    };
+    let (mut tournament, _) = Tournament::create(setup_with(format, 4)).unwrap();
+    assert_eq!(
+        tournament.execute(report(0, Side::A)).unwrap(),
+        [
+            result_reported(0, Side::A),
+            slot_filled(2, Side::A, 101),
+            slot_filled(3, Side::A, 104),
+        ]
+    );
+    assert_eq!(
+        tournament.execute(report(1, Side::B)).unwrap(),
+        [
+            result_reported(1, Side::B),
+            slot_filled(2, Side::B, 103),
+            slot_filled(3, Side::B, 102),
+        ]
+    );
+    tournament
+}
+
+#[test]
+fn bronze_match_after_the_final_completes() {
+    let mut tournament = bronze_at_finals();
+    assert_eq!(
+        tournament.execute(report(2, Side::B)).unwrap(),
+        [result_reported(2, Side::B)]
+    );
+    assert_eq!(tournament.status(), Status::InProgress);
+    assert_eq!(
+        tournament.execute(report(3, Side::A)).unwrap(),
+        [result_reported(3, Side::A), completed(103)]
+    );
+    assert_eq!(
+        tournament.status(),
+        Status::Complete {
+            champion: EntrantId(103)
+        }
+    );
+}
+
+#[test]
+fn final_after_the_bronze_match_completes() {
+    let mut tournament = bronze_at_finals();
+    assert_eq!(
+        tournament.execute(report(3, Side::B)).unwrap(),
+        [result_reported(3, Side::B)]
+    );
+    assert_eq!(tournament.status(), Status::InProgress);
+    assert_eq!(
+        tournament.execute(report(2, Side::A)).unwrap(),
+        [result_reported(2, Side::A), completed(101)]
+    );
+    assert_eq!(
+        tournament.status(),
+        Status::Complete {
+            champion: EntrantId(101)
+        }
+    );
 }

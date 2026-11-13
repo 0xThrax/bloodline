@@ -1,4 +1,4 @@
-use crate::{Bracket, EntrantId, Match, MatchId, Slot, Source};
+use crate::{Bracket, Bronze, EntrantId, Match, MatchId, Slot, Source};
 
 /// The largest entrant count for an elimination format. Its bracket size,
 /// 2^31, fits in a `u32`, and so do the 2^32 - 1 matches of its full double
@@ -23,13 +23,33 @@ pub(crate) fn seed_order(size: u32) -> Vec<u32> {
     order
 }
 
+/// The fewest entrants a single elimination tournament with `bronze` needs.
+pub(crate) fn min_single_elimination_entrants(bronze: Bronze) -> u32 {
+    match bronze {
+        Bronze::None => 2,
+        // Both semifinals must exist.
+        Bronze::Match => 4,
+    }
+}
+
 /// Builds the single elimination graph for `entrants`, in seed order, with
 /// the matches ordered by id. The caller guarantees
-/// `2 <= entrants.len() <= MAX_ELIMINATION_ENTRANTS`.
-pub(crate) fn single_elimination(entrants: &[EntrantId]) -> Vec<Match> {
+/// `min_single_elimination_entrants(bronze) <= entrants.len() <= MAX_ELIMINATION_ENTRANTS`.
+pub(crate) fn single_elimination(entrants: &[EntrantId], bronze: Bronze) -> Vec<Match> {
     let size = (entrants.len() as u32).next_power_of_two();
     let mut plan = Plan::default();
-    winners_bracket(&mut plan, size);
+    let winners = winners_bracket(&mut plan, size);
+    let semifinals = winners.len().checked_sub(2).and_then(|i| winners.get(i));
+    if let (Bronze::Match, Some(semifinals)) = (bronze, semifinals) {
+        plan.push_round(
+            Bracket::Bronze,
+            1,
+            [[
+                Source::Loser(semifinals.get(0)),
+                Source::Loser(semifinals.get(1)),
+            ]],
+        );
+    }
     remove_byes(plan.0, entrants)
 }
 
