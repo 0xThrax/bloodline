@@ -1,9 +1,10 @@
 name: CI
 
 on:
+  # No paths-ignore here: `check` is a required status, and a skipped
+  # workflow would leave documentation-only pull requests unmergeable.
   pull_request:
     branches: [main]
-    paths-ignore: ["**.md", "LICENSE"]
   push:
     branches: [main]
     paths-ignore: ["**.md", "LICENSE"]
