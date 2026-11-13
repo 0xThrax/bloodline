@@ -1,8 +1,13 @@
 use crate::{Bracket, EntrantId, Match, MatchId, Slot, Source};
 
-/// The largest entrant count. Its bracket size, 2^31, fits in a `u32`, and so
-/// do the 2^32 - 1 matches of its full double elimination graph.
-pub(crate) const MAX_ENTRANTS: u32 = 1 << 31;
+/// The largest entrant count for an elimination format. Its bracket size,
+/// 2^31, fits in a `u32`, and so do the 2^32 - 1 matches of its full double
+/// elimination graph.
+pub(crate) const MAX_ELIMINATION_ENTRANTS: u32 = 1 << 31;
+
+/// The largest entrant count for round robin. Its 523,776 matches fit in a
+/// `u32` and stay practical to hold in memory.
+pub(crate) const MAX_ROUND_ROBIN_ENTRANTS: u32 = 1024;
 
 /// Seed numbers in bracket order, top to bottom, for a bracket of `size` places.
 ///
@@ -20,7 +25,7 @@ pub(crate) fn seed_order(size: u32) -> Vec<u32> {
 
 /// Builds the single elimination graph for `entrants`, in seed order, with
 /// the matches ordered by id. The caller guarantees
-/// `2 <= entrants.len() <= MAX_ENTRANTS`.
+/// `2 <= entrants.len() <= MAX_ELIMINATION_ENTRANTS`.
 pub(crate) fn single_elimination(entrants: &[EntrantId]) -> Vec<Match> {
     let size = (entrants.len() as u32).next_power_of_two();
     let mut plan = Plan::default();
@@ -30,7 +35,7 @@ pub(crate) fn single_elimination(entrants: &[EntrantId]) -> Vec<Match> {
 
 /// Builds the double elimination graph for `entrants`, in seed order, with
 /// the matches ordered by id. The caller guarantees
-/// `2 <= entrants.len() <= MAX_ENTRANTS`.
+/// `2 <= entrants.len() <= MAX_ELIMINATION_ENTRANTS`.
 pub(crate) fn double_elimination(entrants: &[EntrantId]) -> Vec<Match> {
     let size = (entrants.len() as u32).next_power_of_two();
     let mut plan = Plan::default();
@@ -40,6 +45,44 @@ pub(crate) fn double_elimination(entrants: &[EntrantId]) -> Vec<Match> {
         grand_final(&mut plan, winners_final.get(0), losers_final);
     }
     remove_byes(plan.0, entrants)
+}
+
+/// Builds the round robin schedule for `entrants`, in seed order, with the
+/// matches ordered by id. The caller guarantees
+/// `2 <= entrants.len() <= MAX_ROUND_ROBIN_ENTRANTS`.
+///
+/// Uses the circle method. An odd entrant count gets a dummy seed, and a
+/// pairing with it is a bye. Seed 1 stays in place while the other seeds
+/// rotate one place each round, and seed 1 changes side every round.
+pub(crate) fn round_robin(entrants: &[EntrantId]) -> Vec<Match> {
+    let count = entrants.len() as u32;
+    let places = count + count % 2;
+    let mut circle: Vec<u32> = (1..=places).collect();
+    let mut matches = Vec::with_capacity((count * (count - 1) / 2) as usize);
+    for round in 1..places {
+        for position in 0..places / 2 {
+            let mut seeds = [
+                circle[position as usize],
+                circle[(places - 1 - position) as usize],
+            ];
+            if position == 0 && round % 2 == 0 {
+                seeds.reverse();
+            }
+            if seeds.iter().any(|&seed| seed > count) {
+                continue;
+            }
+            matches.push(Match {
+                id: MatchId(matches.len() as u32),
+                bracket: Bracket::Group,
+                round,
+                position,
+                slots: seeds.map(|seed| slot(Source::Seed(seed), entrants)),
+                result: None,
+            });
+        }
+        circle[1..].rotate_right(1);
+    }
+    matches
 }
 
 /// A match of the full graph, before byes are removed.

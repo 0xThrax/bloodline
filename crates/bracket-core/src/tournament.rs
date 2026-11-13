@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use crate::graph::{self, MAX_ENTRANTS};
+use crate::graph::{self, MAX_ELIMINATION_ENTRANTS, MAX_ROUND_ROBIN_ENTRANTS};
 use crate::{
     Bracket, Command, Error, Event, Format, Match, MatchId, MatchResult, Setup, Side, Source,
     Status,
@@ -24,13 +24,15 @@ impl Tournament {
     /// # Errors
     ///
     /// Returns [`Error::TooFewEntrants`] for fewer than two entrants,
-    /// [`Error::TooManyEntrants`] for more than 2^31, and
+    /// [`Error::TooManyEntrants`] for more than 2^31 in an elimination format
+    /// or more than 1024 in round robin, and
     /// [`Error::DuplicateEntrant`] for the first entrant listed twice.
     pub fn create(setup: Setup) -> Result<(Self, Vec<Event>), Error> {
         validate(&setup)?;
         let matches = match setup.format {
             Format::SingleElimination => graph::single_elimination(&setup.entrants),
             Format::DoubleElimination => graph::double_elimination(&setup.entrants),
+            Format::RoundRobin { .. } => graph::round_robin(&setup.entrants),
         };
         let event = Event::Created {
             setup: setup.clone(),
@@ -51,13 +53,16 @@ impl Tournament {
     /// tournament ends when side A wins the grand final, or else when the
     /// reset gets its result.
     ///
+    /// In round robin, [`Command::ReportResult`] returns only
+    /// [`Event::ResultReported`], and the result can be a draw.
+    ///
     /// # Errors
     ///
     /// Returns [`Error::UnknownMatch`] if the match does not exist,
     /// [`Error::MatchAlreadyComplete`] if it has a result,
     /// [`Error::MatchNotReady`] if a slot has no entrant yet, and
-    /// [`Error::DrawNotAllowed`] if the result is a draw. On an error the
-    /// tournament is unchanged.
+    /// [`Error::DrawNotAllowed`] if the result is a draw in an elimination
+    /// format. On an error the tournament is unchanged.
     pub fn execute(&mut self, command: Command) -> Result<Vec<Event>, Error> {
         let events = match command {
             Command::ReportResult { match_id, result } => self.report_result(match_id, result)?,
@@ -120,8 +125,9 @@ impl Tournament {
     /// The number of rounds in `bracket`, or 0 if the tournament has no
     /// match in it.
     ///
-    /// Rounds are numbered as in the full power-of-two bracket, so this is
-    /// the round of the last match in `bracket`.
+    /// This is the round of the last match in `bracket`. Elimination rounds
+    /// are numbered as in the full power-of-two bracket, so a round left
+    /// without matches by byes still counts.
     pub fn round_count(&self, bracket: Bracket) -> u32 {
         self.matches
             .iter()
@@ -132,6 +138,10 @@ impl Tournament {
 
     /// Whether the tournament has a champion.
     pub fn status(&self) -> Status {
+        // Round robin has no final, so the rule below does not apply to it.
+        if self.is_round_robin() {
+            return Status::InProgress;
+        }
         // Only the last match, or the grand final just before the reset, can
         // end a tournament.
         self.matches
@@ -156,6 +166,13 @@ impl Tournament {
         let [Some(a), Some(b)] = reported.slots.each_ref().map(|slot| slot.entrant) else {
             return Err(Error::MatchNotReady(id));
         };
+        // Round robin entrants never move, and no single match ends it.
+        if self.is_round_robin() {
+            return Ok(vec![Event::ResultReported {
+                match_id: id,
+                result,
+            }]);
+        }
         let Some(side) = result.winner else {
             return Err(Error::DrawNotAllowed(id));
         };
@@ -183,6 +200,10 @@ impl Tournament {
             }
         }
         Ok(events)
+    }
+
+    fn is_round_robin(&self) -> bool {
+        matches!(self.setup.format, Format::RoundRobin { .. })
     }
 
     /// Whether a win for `winner` in `reported` ends the tournament.
@@ -242,7 +263,11 @@ impl Tournament {
 }
 
 fn validate(setup: &Setup) -> Result<(), Error> {
-    check_entrant_count(setup.entrants.len())?;
+    let max = match setup.format {
+        Format::SingleElimination | Format::DoubleElimination => MAX_ELIMINATION_ENTRANTS,
+        Format::RoundRobin { .. } => MAX_ROUND_ROBIN_ENTRANTS,
+    };
+    check_entrant_count(setup.entrants.len(), max)?;
     let mut seen = BTreeSet::new();
     match setup
         .entrants
@@ -254,10 +279,10 @@ fn validate(setup: &Setup) -> Result<(), Error> {
     }
 }
 
-fn check_entrant_count(count: usize) -> Result<(), Error> {
+fn check_entrant_count(count: usize, max: u32) -> Result<(), Error> {
     if count < 2 {
         Err(Error::TooFewEntrants)
-    } else if u32::try_from(count).map_or(true, |count| count > MAX_ENTRANTS) {
+    } else if u32::try_from(count).map_or(true, |count| count > max) {
         Err(Error::TooManyEntrants)
     } else {
         Ok(())
@@ -266,15 +291,20 @@ fn check_entrant_count(count: usize) -> Result<(), Error> {
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_ENTRANTS, check_entrant_count};
+    use super::{MAX_ELIMINATION_ENTRANTS, MAX_ROUND_ROBIN_ENTRANTS, check_entrant_count};
     use crate::Error;
 
     #[test]
     fn entrant_count_limits() {
-        let max = MAX_ENTRANTS as usize;
-        assert_eq!(check_entrant_count(1), Err(Error::TooFewEntrants));
-        assert_eq!(check_entrant_count(2), Ok(()));
-        assert_eq!(check_entrant_count(max), Ok(()));
-        assert_eq!(check_entrant_count(max + 1), Err(Error::TooManyEntrants));
+        for max in [MAX_ELIMINATION_ENTRANTS, MAX_ROUND_ROBIN_ENTRANTS] {
+            let count = max as usize;
+            assert_eq!(check_entrant_count(1, max), Err(Error::TooFewEntrants));
+            assert_eq!(check_entrant_count(2, max), Ok(()));
+            assert_eq!(check_entrant_count(count, max), Ok(()));
+            assert_eq!(
+                check_entrant_count(count + 1, max),
+                Err(Error::TooManyEntrants)
+            );
+        }
     }
 }
