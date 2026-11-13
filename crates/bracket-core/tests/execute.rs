@@ -18,7 +18,7 @@ fn report(match_id: u32, winner: Side) -> Command {
     Command::ReportResult {
         match_id: MatchId(match_id),
         result: MatchResult {
-            winner,
+            winner: Some(winner),
             score: None,
         },
     }
@@ -28,7 +28,7 @@ fn result_reported(match_id: u32, winner: Side) -> Event {
     Event::ResultReported {
         match_id: MatchId(match_id),
         result: MatchResult {
-            winner,
+            winner: Some(winner),
             score: None,
         },
     }
@@ -73,7 +73,7 @@ fn report_moves_the_winner_and_completes_the_final() {
         .execute(Command::ReportResult {
             match_id: MatchId(0),
             result: MatchResult {
-                winner: Side::B,
+                winner: Some(Side::B),
                 score,
             },
         })
@@ -84,7 +84,7 @@ fn report_moves_the_winner_and_completes_the_final() {
             Event::ResultReported {
                 match_id: MatchId(0),
                 result: MatchResult {
-                    winner: Side::B,
+                    winner: Some(Side::B),
                     score
                 },
             },
@@ -149,6 +149,47 @@ fn match_already_complete() {
     assert_eq!(tournament, before);
 }
 
+fn draw(match_id: u32) -> Command {
+    Command::ReportResult {
+        match_id: MatchId(match_id),
+        result: MatchResult {
+            winner: None,
+            score: Some([1, 1]),
+        },
+    }
+}
+
+#[test]
+fn draw_not_allowed_in_single_elimination() {
+    let (mut tournament, _) = Tournament::create(setup(4)).unwrap();
+    let before = tournament.clone();
+    assert_eq!(
+        tournament.execute(draw(0)),
+        Err(Error::DrawNotAllowed(MatchId(0)))
+    );
+    assert_eq!(tournament, before);
+}
+
+#[test]
+fn draw_not_allowed_in_double_elimination() {
+    let mut tournament = double_at_grand_final();
+    let before = tournament.clone();
+    assert_eq!(
+        tournament.execute(draw(1)),
+        Err(Error::DrawNotAllowed(MatchId(1)))
+    );
+    assert_eq!(tournament, before);
+}
+
+#[test]
+fn draw_checked_after_readiness() {
+    let (mut tournament, _) = Tournament::create(setup(4)).unwrap();
+    assert_eq!(
+        tournament.execute(draw(2)),
+        Err(Error::MatchNotReady(MatchId(2)))
+    );
+}
+
 #[test]
 fn replay_rebuilds_the_tournament() {
     let (tournament, events) = run(4, [report(0, Side::A), report(1, Side::B)]);
@@ -179,6 +220,19 @@ fn invalid_log() {
         (
             "result for an unknown match",
             vec![created.clone(), result_reported(2, Side::A)],
+        ),
+        (
+            "draw",
+            vec![
+                created.clone(),
+                Event::ResultReported {
+                    match_id: MatchId(0),
+                    result: MatchResult {
+                        winner: None,
+                        score: None,
+                    },
+                },
+            ],
         ),
         ("result without its winner moving", events[..2].to_vec()),
         (

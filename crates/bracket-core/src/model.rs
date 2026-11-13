@@ -103,8 +103,10 @@ impl Slot {
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct MatchResult {
-    /// The side that won.
-    pub winner: Side,
+    /// The side that won, or `None` for a draw.
+    ///
+    /// Single and double elimination matches cannot end in a draw.
+    pub winner: Option<Side>,
     /// The score as `[A, B]`. The core records it and does not check it against `winner`.
     pub score: Option<[u32; 2]>,
 }
@@ -162,7 +164,7 @@ impl Match {
     }
 
     pub(crate) fn winner(&self) -> Option<EntrantId> {
-        self.slots[self.result.as_ref()?.winner.index()].entrant
+        self.slots[self.result.as_ref()?.winner?.index()].entrant
     }
 }
 

@@ -54,8 +54,9 @@ impl Tournament {
     /// # Errors
     ///
     /// Returns [`Error::UnknownMatch`] if the match does not exist,
-    /// [`Error::MatchAlreadyComplete`] if it has a result, and
-    /// [`Error::MatchNotReady`] if a slot has no entrant yet. On an error the
+    /// [`Error::MatchAlreadyComplete`] if it has a result,
+    /// [`Error::MatchNotReady`] if a slot has no entrant yet, and
+    /// [`Error::DrawNotAllowed`] if the result is a draw. On an error the
     /// tournament is unchanged.
     pub fn execute(&mut self, command: Command) -> Result<Vec<Event>, Error> {
         let events = match command {
@@ -140,7 +141,8 @@ impl Tournament {
             .find(|m| {
                 m.result
                     .as_ref()
-                    .is_some_and(|result| self.ends_tournament(m, result.winner))
+                    .and_then(|result| result.winner)
+                    .is_some_and(|winner| self.ends_tournament(m, winner))
             })
             .and_then(Match::winner)
             .map_or(Status::InProgress, |champion| Status::Complete { champion })
@@ -154,11 +156,14 @@ impl Tournament {
         let [Some(a), Some(b)] = reported.slots.each_ref().map(|slot| slot.entrant) else {
             return Err(Error::MatchNotReady(id));
         };
-        let (winner, loser) = match result.winner {
+        let Some(side) = result.winner else {
+            return Err(Error::DrawNotAllowed(id));
+        };
+        let (winner, loser) = match side {
             Side::A => (a, b),
             Side::B => (b, a),
         };
-        let ends = self.ends_tournament(reported, result.winner);
+        let ends = self.ends_tournament(reported, side);
         let mut events = vec![Event::ResultReported {
             match_id: id,
             result,
