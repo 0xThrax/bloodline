@@ -4,13 +4,9 @@ Read `ARCHITECTURE.md` first. It explains the components, the core model, and th
 
 ## Commands
 
-Run all three before finishing any change. CI runs the same ones.
+Run `just check` before finishing any change. It runs exactly what CI runs: rustfmt, clippy, the tests, and rustdoc, all with warnings denied.
 
-```sh
-cargo fmt --all --check
-cargo clippy --workspace --all-targets --all-features -- -D warnings
-cargo test --workspace --all-features
-```
+While iterating, run one test file with `cargo test -p bracket-core --test <name>`, for example `--test properties`.
 
 ## Rules for `bracket-core`
 
