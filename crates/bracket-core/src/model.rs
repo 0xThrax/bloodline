@@ -41,6 +41,35 @@ pub enum Format {
     /// the losers bracket champion on side B. If side B wins, the two meet
     /// again in a reset, and the winner of the reset is the champion.
     DoubleElimination,
+    /// Each entrant plays every other entrant once, and every match is in
+    /// [`Bracket::Group`]. A match can end in a draw.
+    RoundRobin {
+        /// The points an entrant earns for each result.
+        points: Points,
+    },
+}
+
+/// The points an entrant earns for a win, a draw, and a loss in round robin.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct Points {
+    /// The points for a win.
+    pub win: u32,
+    /// The points for a draw.
+    pub draw: u32,
+    /// The points for a loss.
+    pub loss: u32,
+}
+
+impl Default for Points {
+    /// Three points for a win, one for a draw, and none for a loss.
+    fn default() -> Self {
+        Self {
+            win: 3,
+            draw: 1,
+            loss: 0,
+        }
+    }
 }
 
 /// Everything needed to create a tournament.
@@ -64,6 +93,8 @@ pub enum Bracket {
     Losers,
     /// The final between the winners and losers brackets.
     GrandFinal,
+    /// The group of a round robin. Every round robin match is here.
+    Group,
 }
 
 /// Where the entrant of a slot comes from.
@@ -105,7 +136,8 @@ impl Slot {
 pub struct MatchResult {
     /// The side that won, or `None` for a draw.
     ///
-    /// Single and double elimination matches cannot end in a draw.
+    /// Single and double elimination matches cannot end in a draw. Round robin
+    /// matches can.
     pub winner: Option<Side>,
     /// The score as `[A, B]`. The core records it and does not check it against `winner`.
     pub score: Option<[u32; 2]>,
@@ -142,8 +174,10 @@ impl Match {
     /// The 0-based position of this match within its round and bracket, from
     /// top to bottom.
     ///
-    /// Positions count every match of the full power-of-two bracket, so a
-    /// match removed for a bye leaves a gap.
+    /// In an elimination format, positions count every match of the full
+    /// power-of-two bracket. In round robin, they count every pairing of the
+    /// round, including the one with the bye when the entrant count is odd.
+    /// Either way, a match removed for a bye leaves a gap.
     pub fn position(&self) -> u32 {
         self.position
     }

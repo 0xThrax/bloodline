@@ -1,5 +1,6 @@
 use bracket_core::{
-    Command, EntrantId, Error, Event, Format, MatchId, MatchResult, Setup, Side, Status, Tournament,
+    Command, EntrantId, Error, Event, Format, MatchId, MatchResult, Points, Setup, Side, Status,
+    Tournament,
 };
 
 /// Entrant ids are `100 + seed`.
@@ -187,6 +188,53 @@ fn draw_checked_after_readiness() {
     assert_eq!(
         tournament.execute(draw(2)),
         Err(Error::MatchNotReady(MatchId(2)))
+    );
+}
+
+fn round_robin(count: u64) -> Setup {
+    setup_with(
+        Format::RoundRobin {
+            points: Points::default(),
+        },
+        count,
+    )
+}
+
+#[test]
+fn draw_in_round_robin() {
+    let (mut tournament, mut events) = Tournament::create(round_robin(3)).unwrap();
+    let reported = tournament.execute(draw(1)).unwrap();
+    assert_eq!(
+        reported,
+        [Event::ResultReported {
+            match_id: MatchId(1),
+            result: MatchResult {
+                winner: None,
+                score: Some([1, 1]),
+            },
+        }]
+    );
+    let m = tournament.get(MatchId(1)).unwrap();
+    assert_eq!(m.result().map(|result| result.winner), Some(None));
+    assert!(!m.is_ready());
+    assert_eq!(tournament.status(), Status::InProgress);
+    events.extend(reported);
+    assert_eq!(Tournament::replay(events), Ok(tournament));
+}
+
+#[test]
+fn round_robin_result_reports_only() {
+    let (mut tournament, _) = Tournament::create(round_robin(3)).unwrap();
+    for id in 0..3 {
+        assert_eq!(
+            tournament.execute(report(id, Side::B)),
+            Ok(vec![result_reported(id, Side::B)])
+        );
+    }
+    assert_eq!(tournament.status(), Status::InProgress);
+    assert_eq!(
+        tournament.execute(report(0, Side::A)),
+        Err(Error::MatchAlreadyComplete(MatchId(0)))
     );
 }
 

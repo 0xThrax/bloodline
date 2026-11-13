@@ -1,4 +1,6 @@
-use bracket_core::{Bracket, EntrantId, Error, Format, MatchId, Setup, Source, Status, Tournament};
+use bracket_core::{
+    Bracket, EntrantId, Error, Format, MatchId, Points, Setup, Source, Status, Tournament,
+};
 
 fn setup(entrants: impl IntoIterator<Item = u64>) -> Setup {
     Setup {
@@ -235,6 +237,84 @@ fn double_graph_for_8_entrants() {
     );
 }
 
+/// Checks a round robin schedule, given as the round, position, and seeds of
+/// each match.
+fn assert_round_robin(count: u64, round_count: u32, expected: &[(u32, u32, [u32; 2])]) {
+    let tournament = create_with(round_robin(), count);
+    assert_eq!(tournament.round_count(Bracket::Group), round_count);
+    assert_eq!(tournament.round_count(Bracket::Winners), 0);
+    assert!(tournament.matches().iter().all(|m| m.is_ready()));
+    let expected: Vec<_> = expected
+        .iter()
+        .map(|&(round, position, [a, b])| (Bracket::Group, round, position, [seed(a), seed(b)]))
+        .collect();
+    assert_eq!(graph(&tournament), expected);
+}
+
+fn round_robin() -> Format {
+    Format::RoundRobin {
+        points: Points::default(),
+    }
+}
+
+#[test]
+fn round_robin_for_2_entrants() {
+    assert_round_robin(2, 1, &[(1, 0, [1, 2])]);
+}
+
+#[test]
+fn round_robin_for_3_entrants() {
+    assert_round_robin(3, 3, &[(1, 1, [2, 3]), (2, 0, [3, 1]), (3, 0, [1, 2])]);
+}
+
+#[test]
+fn round_robin_for_4_entrants() {
+    assert_round_robin(
+        4,
+        3,
+        &[
+            (1, 0, [1, 4]),
+            (1, 1, [2, 3]),
+            (2, 0, [3, 1]),
+            (2, 1, [4, 2]),
+            (3, 0, [1, 2]),
+            (3, 1, [3, 4]),
+        ],
+    );
+}
+
+#[test]
+fn round_robin_for_5_entrants() {
+    assert_round_robin(
+        5,
+        5,
+        &[
+            (1, 1, [2, 5]),
+            (1, 2, [3, 4]),
+            (2, 0, [5, 1]),
+            (2, 2, [2, 3]),
+            (3, 0, [1, 4]),
+            (3, 1, [5, 3]),
+            (4, 0, [3, 1]),
+            (4, 1, [4, 2]),
+            (5, 0, [1, 2]),
+            (5, 2, [4, 5]),
+        ],
+    );
+}
+
+#[test]
+fn default_points() {
+    assert_eq!(
+        Points::default(),
+        Points {
+            win: 3,
+            draw: 1,
+            loss: 0
+        }
+    );
+}
+
 #[test]
 fn create_returns_created_event() {
     let setup = setup([7, 3, 9]);
@@ -271,4 +351,13 @@ fn duplicate_entrant() {
         Tournament::create(setup([1, 2, 3, 2, 1])),
         Err(Error::DuplicateEntrant(EntrantId(2)))
     );
+}
+
+#[test]
+fn too_many_round_robin_entrants() {
+    let setup = Setup {
+        format: round_robin(),
+        entrants: (0..1025).map(EntrantId).collect(),
+    };
+    assert_eq!(Tournament::create(setup), Err(Error::TooManyEntrants));
 }

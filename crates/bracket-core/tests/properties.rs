@@ -1,8 +1,9 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+use std::ops::RangeInclusive;
 
 use bracket_core::{
-    Bracket, Command, EntrantId, Error, Event, Format, MatchId, MatchResult, Setup, Side, Source,
-    Status, Tournament,
+    Bracket, Command, EntrantId, Error, Event, Format, MatchId, MatchResult, Points, Setup, Side,
+    Source, Status, Tournament,
 };
 use proptest::prelude::*;
 use proptest::sample::Index;
@@ -10,9 +11,32 @@ use proptest::sample::Index;
 const SINGLE: Format = Format::SingleElimination;
 const DOUBLE: Format = Format::DoubleElimination;
 
-/// Setups of `format` with 2 to 128 distinct entrants in random seed order.
+fn round_robin() -> Format {
+    Format::RoundRobin {
+        points: Points::default(),
+    }
+}
+
+/// The entrant counts that tests of `format` cover.
+fn sizes(format: &Format) -> RangeInclusive<usize> {
+    match format {
+        Format::RoundRobin { .. } => 2..=32,
+        _ => 2..=128,
+    }
+}
+
+/// The most reports any tournament of `format` from [`setups`] needs.
+fn max_reports(format: &Format) -> usize {
+    let max = *sizes(format).end();
+    match format {
+        Format::RoundRobin { .. } => max * (max - 1) / 2,
+        _ => 2 * max - 1,
+    }
+}
+
+/// Setups of `format` with distinct entrants in random seed order.
 fn setups(format: Format) -> impl Strategy<Value = Setup> {
-    prop::collection::btree_set(any::<u64>(), 2..=128)
+    prop::collection::btree_set(any::<u64>(), sizes(&format))
         .prop_map(|ids| ids.into_iter().map(EntrantId).collect::<Vec<_>>())
         .prop_shuffle()
         .prop_map(move |entrants| Setup {
@@ -29,26 +53,29 @@ fn create(setup: Setup) -> Tournament {
 #[derive(Debug, Clone)]
 struct Pick {
     ready: Index,
-    winner: Side,
+    winner: Option<Side>,
     score: Option<[u32; 2]>,
 }
 
-/// The most reports any tournament from [`setups`] needs.
-const MAX_REPORTS: usize = 2 * 128 - 1;
-
-/// Setups of `format` with enough picks to finish them.
+/// Setups of `format` with enough picks to finish them. Picks are draws
+/// only where `format` allows them.
 fn runs(format: Format) -> impl Strategy<Value = (Setup, Vec<Pick>)> {
-    let pick = (
-        any::<Index>(),
-        prop_oneof![Just(Side::A), Just(Side::B)],
-        any::<Option<[u32; 2]>>(),
-    )
-        .prop_map(|(ready, winner, score)| Pick {
-            ready,
-            winner,
-            score,
+    let winner = match format {
+        Format::RoundRobin { .. } => {
+            prop_oneof![Just(Some(Side::A)), Just(Some(Side::B)), Just(None)].boxed()
+        }
+        _ => prop_oneof![Just(Some(Side::A)), Just(Some(Side::B))].boxed(),
+    };
+    let reports = max_reports(&format);
+    let pick =
+        (any::<Index>(), winner, any::<Option<[u32; 2]>>()).prop_map(|(ready, winner, score)| {
+            Pick {
+                ready,
+                winner,
+                score,
+            }
         });
-    (setups(format), prop::collection::vec(pick, MAX_REPORTS))
+    (setups(format), prop::collection::vec(pick, reports))
 }
 
 fn ready_matches(tournament: &Tournament) -> Vec<MatchId> {
@@ -85,7 +112,13 @@ fn run(
         if ready.is_empty() {
             break;
         }
-        let command = report(*pick.ready.get(&ready), pick.winner, pick.score);
+        let command = Command::ReportResult {
+            match_id: *pick.ready.get(&ready),
+            result: MatchResult {
+                winner: pick.winner,
+                score: pick.score,
+            },
+        };
         check(&tournament, &events, &command)?;
         events.extend(tournament.execute(command).unwrap());
     }
@@ -234,18 +267,20 @@ fn check_failed_command(
         prop_assert!(after.execute(report(target, Side::A, None)).is_err());
         prop_assert_eq!(&after, tournament);
 
-        let Command::ReportResult { match_id, .. } = valid else {
-            return Err(TestCaseError::fail("not a report"));
-        };
-        let draw = Command::ReportResult {
-            match_id: *match_id,
-            result: MatchResult {
-                winner: None,
-                score: None,
-            },
-        };
-        prop_assert_eq!(after.execute(draw), Err(Error::DrawNotAllowed(*match_id)));
-        prop_assert_eq!(&after, tournament);
+        if !matches!(tournament.setup().format, Format::RoundRobin { .. }) {
+            let Command::ReportResult { match_id, .. } = valid else {
+                return Err(TestCaseError::fail("not a report"));
+            };
+            let draw = Command::ReportResult {
+                match_id: *match_id,
+                result: MatchResult {
+                    winner: None,
+                    score: None,
+                },
+            };
+            prop_assert_eq!(after.execute(draw), Err(Error::DrawNotAllowed(*match_id)));
+            prop_assert_eq!(&after, tournament);
+        }
 
         after.execute(valid.clone()).unwrap();
         let before = after.clone();
@@ -260,24 +295,31 @@ fn check_ready_matches(setup: Setup, picks: &[Pick]) -> Result<(), TestCaseError
     run(setup, picks, |tournament, _, _| {
         let unknown = MatchId(tournament.matches().len() as u32);
         let ids = tournament.matches().iter().map(|m| m.id()).chain([unknown]);
-        // A rejected command leaves the copy unchanged, as
-        // `check_failed_command` shows, so only an accepted one needs a new copy.
+        // Every report goes to one copy. A report changes only its own match
+        // and later ones, so in reverse id order each match is checked in the
+        // state of `tournament`, without a new copy per accepted report.
         let mut copy = tournament.clone();
-        for id in ids {
-            let ready = tournament.get(id).is_some_and(|m| m.is_ready());
+        for id in ids.rev() {
+            let ready = copy.get(id).is_some_and(|m| m.is_ready());
             let accepted = copy.execute(report(id, Side::B, None)).is_ok();
             prop_assert_eq!(accepted, ready, "{:?}", id);
-            if accepted {
-                copy = tournament.clone();
-            }
         }
         Ok(())
     })?;
     Ok(())
 }
 
-fn targets() -> impl Strategy<Value = Vec<Index>> {
-    prop::collection::vec(any::<Index>(), MAX_REPORTS)
+fn targets(format: &Format) -> impl Strategy<Value = Vec<Index>> {
+    prop::collection::vec(any::<Index>(), max_reports(format))
+}
+
+/// The two seeds of a round robin match.
+fn seeds(m: &bracket_core::Match) -> Result<[u32; 2], TestCaseError> {
+    let [a, b] = m.slots();
+    match (a.source(), b.source()) {
+        (Source::Seed(a), Source::Seed(b)) => Ok([*a, *b]),
+        _ => Err(TestCaseError::fail("a round robin slot without a seed")),
+    }
 }
 
 proptest! {
@@ -461,7 +503,7 @@ proptest! {
     #[test]
     fn failed_command_leaves_the_tournament_unchanged(
         (setup, picks) in runs(SINGLE),
-        targets in targets(),
+        targets in targets(&SINGLE),
     ) {
         check_failed_command(setup, &picks, targets)?;
     }
@@ -469,7 +511,7 @@ proptest! {
     #[test]
     fn double_failed_command_leaves_the_tournament_unchanged(
         (setup, picks) in runs(DOUBLE),
-        targets in targets(),
+        targets in targets(&DOUBLE),
     ) {
         check_failed_command(setup, &picks, targets)?;
     }
@@ -481,6 +523,65 @@ proptest! {
 
     #[test]
     fn double_ready_matches_are_the_reportable_ones((setup, picks) in runs(DOUBLE)) {
+        check_ready_matches(setup, &picks)?;
+    }
+
+    #[test]
+    fn round_robin_pairs_meet_once(setup in setups(round_robin())) {
+        let count = setup.entrants.len() as u32;
+        let tournament = create(setup);
+        prop_assert_eq!(tournament.matches().len() as u32, count * (count - 1) / 2);
+        let mut pairs = BTreeSet::new();
+        for m in tournament.matches() {
+            prop_assert_eq!(m.bracket(), Bracket::Group);
+            let [a, b] = seeds(m)?;
+            prop_assert!(a != b && a <= count && b <= count, "{:?}", m.id());
+            prop_assert!(pairs.insert((a.min(b), a.max(b))), "{:?}", m.id());
+        }
+    }
+
+    #[test]
+    fn round_robin_rounds_and_byes(setup in setups(round_robin())) {
+        let count = setup.entrants.len() as u32;
+        let places = count + count % 2;
+        let tournament = create(setup);
+        prop_assert_eq!(tournament.round_count(Bracket::Group), places - 1);
+        let mut rounds_played: BTreeMap<u32, u32> = BTreeMap::new();
+        for round in 1..places {
+            let mut seen = BTreeSet::new();
+            for m in tournament.matches().iter().filter(|m| m.round() == round) {
+                for seed in seeds(m)? {
+                    prop_assert!(seen.insert(seed), "seed {} twice in round {}", seed, round);
+                    *rounds_played.entry(seed).or_default() += 1;
+                }
+            }
+        }
+        // An entrant misses only the round of its bye, if the count is odd.
+        let expected: BTreeMap<u32, u32> =
+            (1..=count).map(|seed| (seed, count - 1)).collect();
+        prop_assert_eq!(rounds_played, expected);
+    }
+
+    #[test]
+    fn round_robin_create_is_deterministic(setup in setups(round_robin())) {
+        check_deterministic(setup)?;
+    }
+
+    #[test]
+    fn round_robin_replay_matches_the_live_tournament((setup, picks) in runs(round_robin())) {
+        check_replay(setup, &picks)?;
+    }
+
+    #[test]
+    fn round_robin_failed_command_leaves_the_tournament_unchanged(
+        (setup, picks) in runs(round_robin()),
+        targets in targets(&round_robin()),
+    ) {
+        check_failed_command(setup, &picks, targets)?;
+    }
+
+    #[test]
+    fn round_robin_ready_matches_are_the_reportable_ones((setup, picks) in runs(round_robin())) {
         check_ready_matches(setup, &picks)?;
     }
 }
