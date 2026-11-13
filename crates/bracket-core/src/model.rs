@@ -33,7 +33,10 @@ impl Side {
 #[non_exhaustive]
 pub enum Format {
     /// Each match eliminates its loser. The winner of the final is the champion.
-    SingleElimination,
+    SingleElimination {
+        /// How third place is decided.
+        bronze: Bronze,
+    },
     /// Each entrant is eliminated after two losses.
     ///
     /// The losers of winners bracket matches drop into the losers bracket.
@@ -47,6 +50,18 @@ pub enum Format {
         /// The points an entrant earns for each result.
         points: Points,
     },
+}
+
+/// How a single elimination tournament decides third place.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[non_exhaustive]
+pub enum Bronze {
+    /// No match for third place.
+    None,
+    /// The two semifinal losers play for third place in [`Bracket::Bronze`].
+    /// Needs at least 4 entrants.
+    Match,
 }
 
 /// The points an entrant earns for a win, a draw, and a loss in round robin.
@@ -87,7 +102,8 @@ pub struct Setup {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub enum Bracket {
-    /// The main bracket. Every single elimination match is here.
+    /// The main bracket. Every single elimination match but the bronze
+    /// match is here.
     Winners,
     /// The bracket that losers of winners bracket matches drop into.
     Losers,
@@ -95,6 +111,8 @@ pub enum Bracket {
     GrandFinal,
     /// The group of a round robin. Every round robin match is here.
     Group,
+    /// The match for third place in single elimination.
+    Bronze,
 }
 
 /// Where the entrant of a slot comes from.
@@ -210,8 +228,9 @@ pub enum Status {
     InProgress,
     /// A result has ended the tournament.
     Complete {
-        /// The winner of the match that ended an elimination tournament, or
-        /// the entrant with rank 1 once every round robin match has a result.
+        /// The winner of the final in single elimination, the winner of the
+        /// match that ended a double elimination tournament, or the entrant
+        /// with rank 1 once every round robin match has a result.
         champion: EntrantId,
     },
 }

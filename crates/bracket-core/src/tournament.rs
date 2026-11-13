@@ -24,14 +24,17 @@ impl Tournament {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::TooFewEntrants`] for fewer than two entrants,
+    /// Returns [`Error::TooFewEntrants`] for fewer than two entrants, or
+    /// fewer than four with [`Bronze::Match`](crate::Bronze::Match),
     /// [`Error::TooManyEntrants`] for more than 2^31 in an elimination format
     /// or more than 1024 in round robin, and
     /// [`Error::DuplicateEntrant`] for the first entrant listed twice.
     pub fn create(setup: Setup) -> Result<(Self, Vec<Event>), Error> {
         validate(&setup)?;
         let matches = match setup.format {
-            Format::SingleElimination => graph::single_elimination(&setup.entrants),
+            Format::SingleElimination { bronze } => {
+                graph::single_elimination(&setup.entrants, bronze)
+            }
             Format::DoubleElimination => graph::double_elimination(&setup.entrants),
             Format::RoundRobin { .. } => graph::round_robin(&setup.entrants),
         };
@@ -50,7 +53,8 @@ impl Tournament {
     /// is left out if no slot takes that entrant. If the result ends the
     /// tournament, neither entrant moves and [`Event::Completed`] comes last.
     ///
-    /// The final ends a single elimination tournament. A double elimination
+    /// A single elimination tournament ends with the last result among the
+    /// final and the bronze match, if it has one. A double elimination
     /// tournament ends when side A wins the grand final, or else when the
     /// reset gets its result.
     ///
@@ -141,32 +145,39 @@ impl Tournament {
 
     /// Whether the tournament has a champion.
     ///
-    /// A round robin is complete when every match has a result, and its
-    /// champion is the entrant of rank 1.
+    /// A single elimination tournament is complete when the final and the
+    /// bronze match have a result, and its champion is the winner of the
+    /// final. A round robin is complete when every match has a result, and
+    /// its champion is the entrant of rank 1.
     pub fn status(&self) -> Status {
-        // Round robin has no final, so the rule below does not apply to it.
-        if self.is_round_robin() {
-            if self.matches.iter().any(|m| m.result.is_none()) {
-                return Status::InProgress;
+        let champion = match self.setup.format {
+            Format::SingleElimination { .. } => {
+                let mut deciding = self.final_and_bronze();
+                let complete = deciding.clone().all(|m| m.result.is_some());
+                deciding.next().filter(|_| complete).and_then(Match::winner)
             }
-            return self
-                .rank_one(None)
-                .map_or(Status::InProgress, |champion| Status::Complete { champion });
-        }
-        // Only the last match, or the grand final just before the reset, can
-        // end a tournament.
-        self.matches
-            .iter()
-            .rev()
-            .take(2)
-            .find(|m| {
-                m.result
-                    .as_ref()
-                    .and_then(|result| result.winner)
-                    .is_some_and(|winner| self.ends_tournament(m, winner))
-            })
-            .and_then(Match::winner)
-            .map_or(Status::InProgress, |champion| Status::Complete { champion })
+            // Only the reset, or the grand final just before it, can end a
+            // double elimination tournament.
+            Format::DoubleElimination => self
+                .matches
+                .iter()
+                .rev()
+                .take(2)
+                .find(|m| {
+                    m.result
+                        .as_ref()
+                        .and_then(|result| result.winner)
+                        .is_some_and(|winner| self.ends_tournament(m, winner))
+                })
+                .and_then(Match::winner),
+            Format::RoundRobin { .. } => {
+                if self.matches.iter().any(|m| m.result.is_none()) {
+                    return Status::InProgress;
+                }
+                self.rank_one(None)
+            }
+        };
+        champion.map_or(Status::InProgress, |champion| Status::Complete { champion })
     }
 
     /// The round robin standings, ordered by rank, or `None` for an
@@ -249,7 +260,13 @@ impl Tournament {
             result,
         }];
         if ends {
-            events.push(Event::Completed { champion: winner });
+            // A bronze match can be the last result, but the final decides
+            // the champion, and it already has its result.
+            let champion = match reported.bracket {
+                Bracket::Bronze => self.final_and_bronze().next().and_then(Match::winner),
+                _ => Some(winner),
+            };
+            events.extend(champion.map(|champion| Event::Completed { champion }));
             return Ok(events);
         }
         let moves = [(Source::Winner(id), winner), (Source::Loser(id), loser)];
@@ -269,17 +286,42 @@ impl Tournament {
         matches!(self.setup.format, Format::RoundRobin { .. })
     }
 
-    /// Whether a win for `winner` in `reported` ends the tournament.
+    /// Whether a win for `winner` in `reported` ends the elimination
+    /// tournament.
     ///
-    /// Side A of the grand final comes from the winners bracket and has not
-    /// lost yet, so a win for side A ends the tournament before the reset.
+    /// Single elimination ends with the last result among the final and the
+    /// bronze match. Side A of the grand final comes from the winners
+    /// bracket and has not lost yet, so a win for side A ends a double
+    /// elimination tournament before the reset.
     fn ends_tournament(&self, reported: &Match, winner: Side) -> bool {
+        if matches!(self.setup.format, Format::SingleElimination { .. }) {
+            let mut deciding = self.final_and_bronze();
+            return deciding.clone().any(|m| m.id == reported.id)
+                && deciding.all(|m| m.id == reported.id || m.result.is_some());
+        }
         let is_last = self
             .matches
             .last()
             .is_some_and(|last| last.id == reported.id);
         let is_grand_final = reported.bracket == Bracket::GrandFinal && reported.round == 1;
         is_last || (is_grand_final && winner == Side::A)
+    }
+
+    /// The final of a single elimination tournament, then its bronze match.
+    ///
+    /// The final is the last winners bracket match, and the bronze match
+    /// follows it.
+    fn final_and_bronze(&self) -> impl Iterator<Item = &Match> + Clone {
+        let last_winners = self
+            .matches
+            .iter()
+            .rposition(|m| m.bracket == Bracket::Winners)
+            .unwrap_or(0);
+        self.matches
+            .get(last_winners..)
+            .unwrap_or_default()
+            .iter()
+            .filter(|m| matches!(m.bracket, Bracket::Winners | Bracket::Bronze))
     }
 
     /// The slot that takes the entrant of `source`, if any.
@@ -326,11 +368,15 @@ impl Tournament {
 }
 
 fn validate(setup: &Setup) -> Result<(), Error> {
-    let max = match setup.format {
-        Format::SingleElimination | Format::DoubleElimination => MAX_ELIMINATION_ENTRANTS,
-        Format::RoundRobin { .. } => MAX_ROUND_ROBIN_ENTRANTS,
+    let (min, max) = match setup.format {
+        Format::SingleElimination { bronze } => (
+            graph::min_single_elimination_entrants(bronze),
+            MAX_ELIMINATION_ENTRANTS,
+        ),
+        Format::DoubleElimination => (2, MAX_ELIMINATION_ENTRANTS),
+        Format::RoundRobin { .. } => (2, MAX_ROUND_ROBIN_ENTRANTS),
     };
-    check_entrant_count(setup.entrants.len(), max)?;
+    check_entrant_count(setup.entrants.len(), min, max)?;
     let mut seen = BTreeSet::new();
     match setup
         .entrants
@@ -342,8 +388,8 @@ fn validate(setup: &Setup) -> Result<(), Error> {
     }
 }
 
-fn check_entrant_count(count: usize, max: u32) -> Result<(), Error> {
-    if count < 2 {
+fn check_entrant_count(count: usize, min: u32, max: u32) -> Result<(), Error> {
+    if u32::try_from(count).is_ok_and(|count| count < min) {
         Err(Error::TooFewEntrants)
     } else if u32::try_from(count).map_or(true, |count| count > max) {
         Err(Error::TooManyEntrants)
@@ -361,11 +407,13 @@ mod tests {
     fn entrant_count_limits() {
         for max in [MAX_ELIMINATION_ENTRANTS, MAX_ROUND_ROBIN_ENTRANTS] {
             let count = max as usize;
-            assert_eq!(check_entrant_count(1, max), Err(Error::TooFewEntrants));
-            assert_eq!(check_entrant_count(2, max), Ok(()));
-            assert_eq!(check_entrant_count(count, max), Ok(()));
+            assert_eq!(check_entrant_count(1, 2, max), Err(Error::TooFewEntrants));
+            assert_eq!(check_entrant_count(2, 2, max), Ok(()));
+            assert_eq!(check_entrant_count(3, 4, max), Err(Error::TooFewEntrants));
+            assert_eq!(check_entrant_count(4, 4, max), Ok(()));
+            assert_eq!(check_entrant_count(count, 2, max), Ok(()));
             assert_eq!(
-                check_entrant_count(count + 1, max),
+                check_entrant_count(count + 1, 2, max),
                 Err(Error::TooManyEntrants)
             );
         }

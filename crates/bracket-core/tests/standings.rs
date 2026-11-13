@@ -1,6 +1,6 @@
 use bracket_core::{
-    Command, EntrantId, Event, Format, MatchResult, Points, Setup, Side, Source, Standing, Status,
-    Tournament,
+    Bronze, Command, EntrantId, Event, Format, MatchResult, Points, Setup, Side, Source, Standing,
+    Status, Tournament,
 };
 
 /// Entrant ids are `100 + seed`.
@@ -62,7 +62,16 @@ fn ranking(tournament: &Tournament) -> Vec<u64> {
 
 #[test]
 fn elimination_has_no_standings() {
-    assert_eq!(create(Format::SingleElimination, 4).standings(), None);
+    assert_eq!(
+        create(
+            Format::SingleElimination {
+                bronze: Bronze::None
+            },
+            4
+        )
+        .standings(),
+        None
+    );
     assert_eq!(create(Format::DoubleElimination, 4).standings(), None);
 }
 

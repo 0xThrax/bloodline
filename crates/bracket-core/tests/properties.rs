@@ -2,14 +2,19 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ops::RangeInclusive;
 
 use bracket_core::{
-    Bracket, Command, EntrantId, Error, Event, Format, MatchId, MatchResult, Points, Setup, Side,
-    Source, Status, Tournament,
+    Bracket, Bronze, Command, EntrantId, Error, Event, Format, MatchId, MatchResult, Points, Setup,
+    Side, Source, Status, Tournament,
 };
 use proptest::prelude::*;
 use proptest::sample::Index;
 
-const SINGLE: Format = Format::SingleElimination;
+const SINGLE: Format = Format::SingleElimination {
+    bronze: Bronze::None,
+};
 const DOUBLE: Format = Format::DoubleElimination;
+const BRONZE: Format = Format::SingleElimination {
+    bronze: Bronze::Match,
+};
 
 fn round_robin() -> Format {
     Format::RoundRobin {
@@ -21,6 +26,9 @@ fn round_robin() -> Format {
 fn sizes(format: &Format) -> RangeInclusive<usize> {
     match format {
         Format::RoundRobin { .. } => 2..=32,
+        Format::SingleElimination {
+            bronze: Bronze::Match,
+        } => 4..=128,
         _ => 2..=128,
     }
 }
@@ -307,6 +315,15 @@ fn check_ready_matches(setup: Setup, picks: &[Pick]) -> Result<(), TestCaseError
         Ok(())
     })?;
     Ok(())
+}
+
+/// The entrant on `side` of a match whose slots are filled.
+fn entrant_on(m: &bracket_core::Match, side: Side) -> EntrantId {
+    let [a, b] = m.slots();
+    match side {
+        Side::A => a.entrant().unwrap(),
+        Side::B => b.entrant().unwrap(),
+    }
 }
 
 fn targets(format: &Format) -> impl Strategy<Value = Vec<Index>> {
@@ -674,5 +691,85 @@ proptest! {
             .collect();
         prop_assert_eq!(completed, [&Event::Completed { champion: rank_one }]);
         prop_assert_eq!(events.last(), Some(&Event::Completed { champion: rank_one }));
+    }
+
+    #[test]
+    fn bronze_match_follows_the_graph_without_one(setup in setups(BRONZE)) {
+        let count = setup.entrants.len();
+        let without = create(Setup { format: SINGLE, ..setup.clone() });
+        let tournament = create(setup);
+        let matches = tournament.matches();
+        prop_assert_eq!(matches.len(), count);
+        prop_assert_eq!(&matches[..count - 1], without.matches());
+
+        let bronze = &matches[count - 1];
+        prop_assert_eq!((bronze.bracket(), bronze.round(), bronze.position()), (Bracket::Bronze, 1, 0));
+        let semifinal_round = tournament.round_count(Bracket::Winners) - 1;
+        let semifinal = |position: u32| {
+            matches
+                .iter()
+                .find(|m| {
+                    m.bracket() == Bracket::Winners
+                        && m.round() == semifinal_round
+                        && m.position() == position
+                })
+                .map(|m| Source::Loser(m.id()))
+        };
+        let sources = bronze.slots().clone().map(|slot| Some(slot.source().clone()));
+        prop_assert_eq!(sources, [semifinal(0), semifinal(1)]);
+    }
+
+    #[test]
+    fn bronze_create_is_deterministic(setup in setups(BRONZE)) {
+        check_deterministic(setup)?;
+    }
+
+    #[test]
+    fn bronze_completes_after_one_report_per_match((setup, picks) in runs(BRONZE)) {
+        let count = setup.entrants.len();
+        let (tournament, events) = run(setup, &picks, |tournament, _, _| {
+            prop_assert_eq!(tournament.status(), Status::InProgress);
+            Ok(())
+        })?;
+        prop_assert_eq!(reported_count(&tournament), count);
+        prop_assert!(ready_matches(&tournament).is_empty());
+
+        let final_match = &tournament.matches()[count - 2];
+        let winner = final_match.result().and_then(|result| result.winner).unwrap();
+        let champion = entrant_on(final_match, winner);
+        prop_assert_eq!(tournament.status(), Status::Complete { champion });
+        let completed: Vec<&Event> = events
+            .iter()
+            .filter(|event| matches!(event, Event::Completed { .. }))
+            .collect();
+        prop_assert_eq!(completed, [&Event::Completed { champion }]);
+        prop_assert_eq!(events.last(), Some(&Event::Completed { champion }));
+
+        for m in tournament.matches() {
+            let winner = m.result().and_then(|result| result.winner).unwrap();
+            let loser = match winner {
+                Side::A => Side::B,
+                Side::B => Side::A,
+            };
+            prop_assert!(entrant_on(m, loser) != champion, "{:?}", m.id());
+        }
+    }
+
+    #[test]
+    fn bronze_replay_matches_the_live_tournament((setup, picks) in runs(BRONZE)) {
+        check_replay(setup, &picks)?;
+    }
+
+    #[test]
+    fn bronze_failed_command_leaves_the_tournament_unchanged(
+        (setup, picks) in runs(BRONZE),
+        targets in targets(&BRONZE),
+    ) {
+        check_failed_command(setup, &picks, targets)?;
+    }
+
+    #[test]
+    fn bronze_ready_matches_are_the_reportable_ones((setup, picks) in runs(BRONZE)) {
+        check_ready_matches(setup, &picks)?;
     }
 }
