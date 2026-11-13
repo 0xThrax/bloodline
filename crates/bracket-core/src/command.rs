@@ -41,9 +41,11 @@ pub enum Event {
         entrant: EntrantId,
     },
     /// A result ended the tournament: the result of the final in single
-    /// elimination, or of the grand final or the reset in double elimination.
+    /// elimination, of the grand final or the reset in double elimination, or
+    /// of the last match without a result in round robin.
     Completed {
-        /// The winner of the match that ended the tournament.
+        /// The winner of the match that ended an elimination tournament, or
+        /// the entrant with rank 1 in round robin.
         champion: EntrantId,
     },
 }

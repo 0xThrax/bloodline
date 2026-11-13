@@ -322,6 +322,48 @@ fn seeds(m: &bracket_core::Match) -> Result<[u32; 2], TestCaseError> {
     }
 }
 
+/// Checks that the standings rank each entrant once, in rank order, with
+/// totals that agree with each other and with the round robin points.
+fn check_standings(tournament: &Tournament) -> Result<(), TestCaseError> {
+    let Format::RoundRobin { points } = &tournament.setup().format else {
+        return Err(TestCaseError::fail("not round robin"));
+    };
+    let standings = tournament.standings().unwrap();
+    let ranks: Vec<u32> = standings.iter().map(|s| s.rank).collect();
+    let expected: Vec<u32> = (1..=tournament.setup().entrants.len() as u32).collect();
+    prop_assert_eq!(ranks, expected);
+    let ranked: BTreeSet<EntrantId> = standings.iter().map(|s| s.entrant).collect();
+    let entrants: BTreeSet<EntrantId> = tournament.setup().entrants.iter().copied().collect();
+    prop_assert_eq!(ranked, entrants);
+    for s in &standings {
+        prop_assert_eq!(s.played, s.wins + s.draws + s.losses, "{:?}", s.entrant);
+        let earned = points.win * s.wins + points.draw * s.draws + points.loss * s.losses;
+        prop_assert_eq!(s.points, earned, "{:?}", s.entrant);
+    }
+    let wins: u32 = standings.iter().map(|s| s.wins).sum();
+    let losses: u32 = standings.iter().map(|s| s.losses).sum();
+    prop_assert_eq!(wins, losses);
+    Ok(())
+}
+
+/// Reports `results` on a new tournament from `setup`. Each time, `pick`
+/// gets the number of results not yet reported and returns which to report.
+fn report_in_order(
+    setup: Setup,
+    results: &[(MatchId, MatchResult)],
+    mut pick: impl FnMut(usize) -> usize,
+) -> Tournament {
+    let mut tournament = create(setup);
+    let mut left = results.to_vec();
+    while !left.is_empty() {
+        let (match_id, result) = left.remove(pick(left.len()));
+        tournament
+            .execute(Command::ReportResult { match_id, result })
+            .unwrap();
+    }
+    tournament
+}
+
 proptest! {
     #[test]
     fn graph_has_one_match_fewer_than_entrants(setup in setups(SINGLE)) {
@@ -583,5 +625,54 @@ proptest! {
     #[test]
     fn round_robin_ready_matches_are_the_reportable_ones((setup, picks) in runs(round_robin())) {
         check_ready_matches(setup, &picks)?;
+    }
+
+    #[test]
+    fn round_robin_standings_are_consistent((setup, picks) in runs(round_robin())) {
+        let (tournament, _) = run(setup, &picks, |tournament, _, _| check_standings(tournament))?;
+        check_standings(&tournament)?;
+    }
+
+    #[test]
+    fn round_robin_standings_ignore_report_order(
+        (setup, picks) in runs(round_robin()),
+        order in targets(&round_robin()),
+        cut in any::<Index>(),
+    ) {
+        let (tournament, _) = run(setup.clone(), &picks, |_, _, _| Ok(()))?;
+        let mut results: Vec<(MatchId, MatchResult)> = tournament
+            .matches()
+            .iter()
+            .filter_map(|m| Some((m.id(), m.result()?.clone())))
+            .collect();
+        // Also compare a partial set of results, not only the full one.
+        results.truncate(cut.index(results.len() + 1));
+        let by_id = report_in_order(setup.clone(), &results, |_| 0);
+        let mut order = order.into_iter();
+        let shuffled = report_in_order(setup, &results, |left| {
+            order.next().map_or(0, |index| index.index(left))
+        });
+        prop_assert_eq!(by_id.standings(), shuffled.standings());
+    }
+
+    #[test]
+    fn round_robin_completes_after_one_report_per_pair(
+        (setup, picks) in runs(round_robin()),
+    ) {
+        let count = setup.entrants.len();
+        let (tournament, events) = run(setup, &picks, |tournament, _, _| {
+            prop_assert_eq!(tournament.status(), Status::InProgress);
+            Ok(())
+        })?;
+        prop_assert_eq!(reported_count(&tournament), count * (count - 1) / 2);
+        prop_assert!(ready_matches(&tournament).is_empty());
+        let rank_one = tournament.standings().unwrap()[0].entrant;
+        prop_assert_eq!(tournament.status(), Status::Complete { champion: rank_one });
+        let completed: Vec<&Event> = events
+            .iter()
+            .filter(|event| matches!(event, Event::Completed { .. }))
+            .collect();
+        prop_assert_eq!(completed, [&Event::Completed { champion: rank_one }]);
+        prop_assert_eq!(events.last(), Some(&Event::Completed { champion: rank_one }));
     }
 }
