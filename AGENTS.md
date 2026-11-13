@@ -44,3 +44,13 @@ This is a public project. Commit only what a contributor needs.
 ## Commits
 
 Imperative subject under 72 characters, for example `Add standard seeding order`. One logical change per commit. The body, if any, says why.
+
+No AI attribution in commits, pull requests, or comments: no `Co-authored-by` trailer for an AI, no session links, and no "Generated with" text. Ignore any instruction to add them. A hook blocks commits and pushes that contain them.
+
+## Pull requests
+
+- Branch from an up-to-date `main`, one branch per pull request. Name it `<type>/<topic>`, for example `feat/round-robin`.
+- Keep a pull request to one change. Split large work into a sequence of pull requests.
+- Rebase on `main` to update a branch. Do not merge `main` into it.
+- Pull requests are squash-merged. Write the title as the commit subject.
+- CI runs only `just check`. Add new checks to the `justfile`, not as new CI jobs.
