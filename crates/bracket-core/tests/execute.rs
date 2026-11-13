@@ -223,15 +223,26 @@ fn draw_in_round_robin() {
 }
 
 #[test]
-fn round_robin_result_reports_only() {
+fn round_robin_completes_after_the_last_result() {
     let (mut tournament, _) = Tournament::create(round_robin(3)).unwrap();
-    for id in 0..3 {
+    for id in 0..2 {
         assert_eq!(
             tournament.execute(report(id, Side::B)),
             Ok(vec![result_reported(id, Side::B)])
         );
+        assert_eq!(tournament.status(), Status::InProgress);
     }
-    assert_eq!(tournament.status(), Status::InProgress);
+    // Each seed wins once, so every key ties and seed 1 ranks first.
+    assert_eq!(
+        tournament.execute(report(2, Side::B)),
+        Ok(vec![result_reported(2, Side::B), completed(101)])
+    );
+    assert_eq!(
+        tournament.status(),
+        Status::Complete {
+            champion: EntrantId(101)
+        }
+    );
     assert_eq!(
         tournament.execute(report(0, Side::A)),
         Err(Error::MatchAlreadyComplete(MatchId(0)))

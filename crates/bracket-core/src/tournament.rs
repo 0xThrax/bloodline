@@ -1,9 +1,10 @@
 use std::collections::BTreeSet;
 
 use crate::graph::{self, MAX_ELIMINATION_ENTRANTS, MAX_ROUND_ROBIN_ENTRANTS};
+use crate::standings;
 use crate::{
-    Bracket, Command, Error, Event, Format, Match, MatchId, MatchResult, Setup, Side, Source,
-    Status,
+    Bracket, Command, EntrantId, Error, Event, Format, Match, MatchId, MatchResult, Setup, Side,
+    Source, Standing, Status,
 };
 
 /// A tournament: its setup and the current state of every match.
@@ -53,8 +54,10 @@ impl Tournament {
     /// tournament ends when side A wins the grand final, or else when the
     /// reset gets its result.
     ///
-    /// In round robin, [`Command::ReportResult`] returns only
-    /// [`Event::ResultReported`], and the result can be a draw.
+    /// In round robin, entrants never move and the result can be a draw.
+    /// [`Command::ReportResult`] returns [`Event::ResultReported`], then
+    /// [`Event::Completed`] with the entrant of rank 1 if no other match is
+    /// left without a result.
     ///
     /// # Errors
     ///
@@ -137,10 +140,18 @@ impl Tournament {
     }
 
     /// Whether the tournament has a champion.
+    ///
+    /// A round robin is complete when every match has a result, and its
+    /// champion is the entrant of rank 1.
     pub fn status(&self) -> Status {
         // Round robin has no final, so the rule below does not apply to it.
         if self.is_round_robin() {
-            return Status::InProgress;
+            if self.matches.iter().any(|m| m.result.is_none()) {
+                return Status::InProgress;
+            }
+            return self
+                .rank_one(None)
+                .map_or(Status::InProgress, |champion| Status::Complete { champion });
         }
         // Only the last match, or the grand final just before the reset, can
         // end a tournament.
@@ -158,6 +169,49 @@ impl Tournament {
             .map_or(Status::InProgress, |champion| Status::Complete { champion })
     }
 
+    /// The round robin standings, ordered by rank, or `None` for an
+    /// elimination format.
+    ///
+    /// Only reported results count. Entrants are ranked by these keys in
+    /// order, the first difference deciding:
+    ///
+    /// 1. Points, from the tournament's [`Points`](crate::Points).
+    /// 2. Head-to-head points: the points from matches between entrants with
+    ///    equal points only. This applies once to each group of equal points
+    ///    and does not recurse into smaller groups.
+    /// 3. Score difference, `score_for - score_against`, over all matches.
+    /// 4. Score for.
+    /// 5. Wins.
+    /// 6. Seed: the better seed ranks higher.
+    pub fn standings(&self) -> Option<Vec<Standing>> {
+        let Format::RoundRobin { points } = &self.setup.format else {
+            return None;
+        };
+        Some(standings::rank(
+            &self.setup.entrants,
+            points,
+            self.results(),
+        ))
+    }
+
+    /// The round robin entrant of rank 1 with every reported result, plus
+    /// `pending`, or `None` for an elimination format.
+    fn rank_one(&self, pending: Option<(&Match, &MatchResult)>) -> Option<EntrantId> {
+        let Format::RoundRobin { points } = &self.setup.format else {
+            return None;
+        };
+        let results = self.results().chain(pending);
+        let standings = standings::rank(&self.setup.entrants, points, results);
+        standings.first().map(|first| first.entrant)
+    }
+
+    /// Every match that has a result, with its result.
+    fn results(&self) -> impl Iterator<Item = (&Match, &MatchResult)> {
+        self.matches
+            .iter()
+            .filter_map(|m| Some((m, m.result.as_ref()?)))
+    }
+
     fn report_result(&self, id: MatchId, result: MatchResult) -> Result<Vec<Event>, Error> {
         let reported = self.get(id).ok_or(Error::UnknownMatch(id))?;
         if reported.result.is_some() {
@@ -166,12 +220,21 @@ impl Tournament {
         let [Some(a), Some(b)] = reported.slots.each_ref().map(|slot| slot.entrant) else {
             return Err(Error::MatchNotReady(id));
         };
-        // Round robin entrants never move, and no single match ends it.
+        // Round robin entrants never move, and it ends with its last result.
         if self.is_round_robin() {
-            return Ok(vec![Event::ResultReported {
+            let is_last = self
+                .matches
+                .iter()
+                .all(|m| m.id == id || m.result.is_some());
+            let completed = is_last
+                .then(|| self.rank_one(Some((reported, &result))))
+                .flatten()
+                .map(|champion| Event::Completed { champion });
+            let reported = Event::ResultReported {
                 match_id: id,
                 result,
-            }]);
+            };
+            return Ok([reported].into_iter().chain(completed).collect());
         }
         let Some(side) = result.winner else {
             return Err(Error::DrawNotAllowed(id));

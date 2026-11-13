@@ -37,7 +37,7 @@ Each phase lands with its tests passing before the next begins.
 
 - [x] 1. Single elimination: workspace, CI, match graph, seeding, byes, results, replay
 - [x] 2. Double elimination: losers bracket, grand final with reset
-- [ ] 3. Round robin: scheduling, standings, tiebreakers
+- [x] 3. Round robin: scheduling, standings, tiebreakers
 - [ ] 4. Combat sports formats: divisions, bronze match, repechage, same-team separation
 - [ ] 5. Server: REST API, SQLite event log, replay on startup
 - [ ] 6. Live updates: WebSocket rooms, sequence numbers, resync on reconnect

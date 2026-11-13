@@ -210,7 +210,34 @@ pub enum Status {
     InProgress,
     /// A result has ended the tournament.
     Complete {
-        /// The winner of the match that ended the tournament.
+        /// The winner of the match that ended an elimination tournament, or
+        /// the entrant with rank 1 once every round robin match has a result.
         champion: EntrantId,
     },
+}
+
+/// The place of one entrant in a round robin, from the results reported so far.
+///
+/// Totals saturate at `u32::MAX`; ranking uses the exact totals.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct Standing {
+    /// The entrant.
+    pub entrant: EntrantId,
+    /// The 1-based rank. No two entrants share a rank.
+    pub rank: u32,
+    /// The matches with a result.
+    pub played: u32,
+    /// The matches won.
+    pub wins: u32,
+    /// The matches drawn.
+    pub draws: u32,
+    /// The matches lost.
+    pub losses: u32,
+    /// The points earned under the tournament's [`Points`].
+    pub points: u32,
+    /// The total of this entrant's scores. A result without a score adds 0.
+    pub score_for: u32,
+    /// The total of the opponents' scores. A result without a score adds 0.
+    pub score_against: u32,
 }
