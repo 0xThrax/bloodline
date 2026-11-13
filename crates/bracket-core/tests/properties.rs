@@ -1,8 +1,8 @@
 use std::collections::BTreeMap;
 
 use bracket_core::{
-    Bracket, Command, EntrantId, Event, Format, MatchId, MatchResult, Setup, Side, Source, Status,
-    Tournament,
+    Bracket, Command, EntrantId, Error, Event, Format, MatchId, MatchResult, Setup, Side, Source,
+    Status, Tournament,
 };
 use proptest::prelude::*;
 use proptest::sample::Index;
@@ -63,7 +63,10 @@ fn ready_matches(tournament: &Tournament) -> Vec<MatchId> {
 fn report(match_id: MatchId, winner: Side, score: Option<[u32; 2]>) -> Command {
     Command::ReportResult {
         match_id,
-        result: MatchResult { winner, score },
+        result: MatchResult {
+            winner: Some(winner),
+            score,
+        },
     }
 }
 
@@ -182,7 +185,7 @@ fn losses_after_run(
     prop_assert!(ready_matches(&tournament).is_empty());
     for m in tournament.matches() {
         let Some(result) = m.result() else { continue };
-        let loser = match result.winner {
+        let loser = match result.winner.unwrap() {
             Side::A => &m.slots()[1],
             Side::B => &m.slots()[0],
         };
@@ -229,6 +232,19 @@ fn check_failed_command(
         let target = *targets.next().unwrap().get(&not_ready);
         let mut after = tournament.clone();
         prop_assert!(after.execute(report(target, Side::A, None)).is_err());
+        prop_assert_eq!(&after, tournament);
+
+        let Command::ReportResult { match_id, .. } = valid else {
+            return Err(TestCaseError::fail("not a report"));
+        };
+        let draw = Command::ReportResult {
+            match_id: *match_id,
+            result: MatchResult {
+                winner: None,
+                score: None,
+            },
+        };
+        prop_assert_eq!(after.execute(draw), Err(Error::DrawNotAllowed(*match_id)));
         prop_assert_eq!(&after, tournament);
 
         after.execute(valid.clone()).unwrap();
@@ -418,7 +434,7 @@ proptest! {
         let [.., grand_final, _] = tournament.matches() else {
             return Err(TestCaseError::fail("no grand final"));
         };
-        let reports = match grand_final.result().map(|result| result.winner) {
+        let reports = match grand_final.result().and_then(|result| result.winner) {
             Some(Side::A) => 2 * count - 2,
             _ => 2 * count - 1,
         };

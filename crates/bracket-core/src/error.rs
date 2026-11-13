@@ -23,6 +23,9 @@ pub enum Error {
     /// This match already has a result.
     #[error("{0:?} already has a result")]
     MatchAlreadyComplete(MatchId),
+    /// A result for this match is a draw, and the format does not allow draws.
+    #[error("{0:?} cannot end in a draw")]
+    DrawNotAllowed(MatchId),
     /// The events do not form a valid history of a tournament.
     #[error("the events do not form a valid tournament history")]
     InvalidLog,
