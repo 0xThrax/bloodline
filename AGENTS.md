@@ -51,6 +51,21 @@ No AI attribution in commits, pull requests, or comments: no `Co-authored-by` tr
 
 - Branch from an up-to-date `main`, one branch per pull request. Name it `<type>/<topic>`, for example `feat/round-robin`.
 - Keep a pull request to one change. Split large work into a sequence of pull requests.
-- Rebase on `main` to update a branch. Do not merge `main` into it.
+- To update a branch, merge `main` into it. Do not force-push.
 - Pull requests are squash-merged. Write the title as the commit subject.
-- CI runs only `just check`. Add new checks to the `justfile`, not as new CI jobs.
+- Run `just check` before you push. A hook runs it when you finish a turn.
+- CI runs only `just check`. Add new checks to that command, not as new CI jobs.
+
+## Writing
+
+Write docs, comments, commit messages, and PR text in Simplified Technical English at about 80% strictness. Use short sentences, the active voice, and one term for one thing. Technical names and code identifiers are permitted.
+
+## Agent skills
+
+### Issue tracker
+
+Issues and specs live in GitHub Issues for `0xThrax/bloodline`. See `docs/agents/issue-tracker.md`.
+
+### Domain docs
+
+Single-context: one `GLOSSARY.md` and `docs/adr/` at the repo root. See `docs/agents/domain.md`.
