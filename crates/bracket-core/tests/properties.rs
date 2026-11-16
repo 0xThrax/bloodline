@@ -15,6 +15,9 @@ const DOUBLE: Format = Format::DoubleElimination;
 const BRONZE: Format = Format::SingleElimination {
     bronze: Bronze::Match,
 };
+const REPECHAGE: Format = Format::SingleElimination {
+    bronze: Bronze::Repechage,
+};
 
 fn round_robin() -> Format {
     Format::RoundRobin {
@@ -29,6 +32,9 @@ fn sizes(format: &Format) -> RangeInclusive<usize> {
         Format::SingleElimination {
             bronze: Bronze::Match,
         } => 4..=128,
+        Format::SingleElimination {
+            bronze: Bronze::Repechage,
+        } => 5..=128,
         _ => 2..=128,
     }
 }
@@ -365,6 +371,47 @@ fn check_standings(tournament: &Tournament) -> Result<(), TestCaseError> {
 
 /// Reports `results` on a new tournament from `setup`. Each time, `pick`
 /// gets the number of results not yet reported and returns which to report.
+/// Runs a single elimination tournament with a bronze option to the end.
+///
+/// Checks that every match gets a result, that the tournament completes
+/// once with the final's winner as champion, and that the champion never
+/// loses.
+fn check_completes_with_bronze(setup: Setup, picks: &[Pick]) -> Result<(), TestCaseError> {
+    let count = setup.entrants.len();
+    let (tournament, events) = run(setup, picks, |tournament, _, _| {
+        prop_assert_eq!(tournament.status(), Status::InProgress);
+        Ok(())
+    })?;
+    prop_assert_eq!(reported_count(&tournament), tournament.matches().len());
+    prop_assert!(ready_matches(&tournament).is_empty());
+
+    // The winners bracket has N - 1 matches, and the final is the last of them.
+    let final_match = &tournament.matches()[count - 2];
+    prop_assert_eq!(final_match.bracket(), Bracket::Winners);
+    let winner = final_match
+        .result()
+        .and_then(|result| result.winner)
+        .unwrap();
+    let champion = entrant_on(final_match, winner);
+    prop_assert_eq!(tournament.status(), Status::Complete { champion });
+    let completed: Vec<&Event> = events
+        .iter()
+        .filter(|event| matches!(event, Event::Completed { .. }))
+        .collect();
+    prop_assert_eq!(completed, [&Event::Completed { champion }]);
+    prop_assert_eq!(events.last(), Some(&Event::Completed { champion }));
+
+    for m in tournament.matches() {
+        let winner = m.result().and_then(|result| result.winner).unwrap();
+        let loser = match winner {
+            Side::A => Side::B,
+            Side::B => Side::A,
+        };
+        prop_assert!(entrant_on(m, loser) != champion, "{:?}", m.id());
+    }
+    Ok(())
+}
+
 fn report_in_order(
     setup: Setup,
     results: &[(MatchId, MatchResult)],
@@ -726,33 +773,7 @@ proptest! {
 
     #[test]
     fn bronze_completes_after_one_report_per_match((setup, picks) in runs(BRONZE)) {
-        let count = setup.entrants.len();
-        let (tournament, events) = run(setup, &picks, |tournament, _, _| {
-            prop_assert_eq!(tournament.status(), Status::InProgress);
-            Ok(())
-        })?;
-        prop_assert_eq!(reported_count(&tournament), count);
-        prop_assert!(ready_matches(&tournament).is_empty());
-
-        let final_match = &tournament.matches()[count - 2];
-        let winner = final_match.result().and_then(|result| result.winner).unwrap();
-        let champion = entrant_on(final_match, winner);
-        prop_assert_eq!(tournament.status(), Status::Complete { champion });
-        let completed: Vec<&Event> = events
-            .iter()
-            .filter(|event| matches!(event, Event::Completed { .. }))
-            .collect();
-        prop_assert_eq!(completed, [&Event::Completed { champion }]);
-        prop_assert_eq!(events.last(), Some(&Event::Completed { champion }));
-
-        for m in tournament.matches() {
-            let winner = m.result().and_then(|result| result.winner).unwrap();
-            let loser = match winner {
-                Side::A => Side::B,
-                Side::B => Side::A,
-            };
-            prop_assert!(entrant_on(m, loser) != champion, "{:?}", m.id());
-        }
+        check_completes_with_bronze(setup, &picks)?;
     }
 
     #[test]
@@ -770,6 +791,74 @@ proptest! {
 
     #[test]
     fn bronze_ready_matches_are_the_reportable_ones((setup, picks) in runs(BRONZE)) {
+        check_ready_matches(setup, &picks)?;
+    }
+
+    #[test]
+    fn repechage_follows_the_graph_without_one(setup in setups(REPECHAGE)) {
+        let count = setup.entrants.len();
+        let without = create(Setup { format: SINGLE, ..setup.clone() });
+        let tournament = create(setup);
+        let matches = tournament.matches();
+        prop_assert_eq!(&matches[..count - 1], without.matches());
+        for m in &matches[count - 1..] {
+            prop_assert!(matches!(m.bracket(), Bracket::Repechage | Bracket::Bronze));
+        }
+        if count < 8 {
+            return Ok(());
+        }
+
+        prop_assert_eq!(matches.len(), count + 3);
+        let rounds = tournament.round_count(Bracket::Winners);
+        let loser = |round: u32, position: u32| {
+            matches
+                .iter()
+                .find(|m| {
+                    m.bracket() == Bracket::Winners && m.round() == round && m.position() == position
+                })
+                .map(|m| Source::Loser(m.id()))
+        };
+        let winner = |id: usize| Some(Source::Winner(matches[id].id()));
+        let quarterfinal = |p| loser(rounds - 2, p);
+        let semifinal = |p| loser(rounds - 1, p);
+        let expected = [
+            (Bracket::Repechage, 0, [quarterfinal(0), quarterfinal(1)]),
+            (Bracket::Repechage, 1, [quarterfinal(2), quarterfinal(3)]),
+            (Bracket::Bronze, 0, [winner(count - 1), semifinal(1)]),
+            (Bracket::Bronze, 1, [winner(count), semifinal(0)]),
+        ];
+        for (m, (bracket, position, sources)) in matches[count - 1..].iter().zip(expected) {
+            prop_assert_eq!((m.bracket(), m.round(), m.position()), (bracket, 1, position));
+            let actual = m.slots().clone().map(|slot| Some(slot.source().clone()));
+            prop_assert_eq!(actual, sources);
+        }
+    }
+
+    #[test]
+    fn repechage_create_is_deterministic(setup in setups(REPECHAGE)) {
+        check_deterministic(setup)?;
+    }
+
+    #[test]
+    fn repechage_completes_after_one_report_per_match((setup, picks) in runs(REPECHAGE)) {
+        check_completes_with_bronze(setup, &picks)?;
+    }
+
+    #[test]
+    fn repechage_replay_matches_the_live_tournament((setup, picks) in runs(REPECHAGE)) {
+        check_replay(setup, &picks)?;
+    }
+
+    #[test]
+    fn repechage_failed_command_leaves_the_tournament_unchanged(
+        (setup, picks) in runs(REPECHAGE),
+        targets in targets(&REPECHAGE),
+    ) {
+        check_failed_command(setup, &picks, targets)?;
+    }
+
+    #[test]
+    fn repechage_ready_matches_are_the_reportable_ones((setup, picks) in runs(REPECHAGE)) {
         check_ready_matches(setup, &picks)?;
     }
 }

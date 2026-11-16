@@ -6,7 +6,8 @@ use crate::{EntrantId, MatchId};
 #[non_exhaustive]
 pub enum Error {
     /// The setup has fewer entrants than its format needs: 2 for every
-    /// format, 4 for single elimination with [`Bronze::Match`](crate::Bronze::Match).
+    /// format, 4 for single elimination with [`Bronze::Match`](crate::Bronze::Match),
+    /// and 5 with [`Bronze::Repechage`](crate::Bronze::Repechage).
     #[error("the setup has fewer entrants than its format needs")]
     TooFewEntrants,
     /// The setup has more entrants than its format allows: 2^31 for single

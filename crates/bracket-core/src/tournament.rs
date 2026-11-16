@@ -25,7 +25,8 @@ impl Tournament {
     /// # Errors
     ///
     /// Returns [`Error::TooFewEntrants`] for fewer than two entrants, or
-    /// fewer than four with [`Bronze::Match`](crate::Bronze::Match),
+    /// fewer than four with [`Bronze::Match`](crate::Bronze::Match) or five
+    /// with [`Bronze::Repechage`](crate::Bronze::Repechage),
     /// [`Error::TooManyEntrants`] for more than 2^31 in an elimination format
     /// or more than 1024 in round robin, and
     /// [`Error::DuplicateEntrant`] for the first entrant listed twice.
@@ -54,7 +55,7 @@ impl Tournament {
     /// tournament, neither entrant moves and [`Event::Completed`] comes last.
     ///
     /// A single elimination tournament ends with the last result among the
-    /// final and the bronze match, if it has one. A double elimination
+    /// final and the bronze matches, if it has any. A double elimination
     /// tournament ends when side A wins the grand final, or else when the
     /// reset gets its result.
     ///
@@ -145,7 +146,7 @@ impl Tournament {
 
     /// Whether the tournament has a champion.
     ///
-    /// A single elimination tournament is complete when the final and the
+    /// A single elimination tournament is complete when the final and every
     /// bronze match have a result, and its champion is the winner of the
     /// final. A round robin is complete when every match has a result, and
     /// its champion is the entrant of rank 1.
@@ -290,7 +291,7 @@ impl Tournament {
     /// tournament.
     ///
     /// Single elimination ends with the last result among the final and the
-    /// bronze match. Side A of the grand final comes from the winners
+    /// bronze matches. Side A of the grand final comes from the winners
     /// bracket and has not lost yet, so a win for side A ends a double
     /// elimination tournament before the reset.
     fn ends_tournament(&self, reported: &Match, winner: Side) -> bool {
@@ -307,10 +308,10 @@ impl Tournament {
         is_last || (is_grand_final && winner == Side::A)
     }
 
-    /// The final of a single elimination tournament, then its bronze match.
+    /// The final of a single elimination tournament, then its bronze matches.
     ///
-    /// The final is the last winners bracket match, and the bronze match
-    /// follows it.
+    /// The final is the last winners bracket match. The repechage and bronze
+    /// matches follow it, and this skips the repechage matches.
     fn final_and_bronze(&self) -> impl Iterator<Item = &Match> + Clone {
         let last_winners = self
             .matches

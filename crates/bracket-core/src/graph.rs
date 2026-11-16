@@ -29,6 +29,8 @@ pub(crate) fn min_single_elimination_entrants(bronze: Bronze) -> u32 {
         Bronze::None => 2,
         // Both semifinals must exist.
         Bronze::Match => 4,
+        // The quarterfinals must exist.
+        Bronze::Repechage => 5,
     }
 }
 
@@ -39,16 +41,43 @@ pub(crate) fn single_elimination(entrants: &[EntrantId], bronze: Bronze) -> Vec<
     let size = (entrants.len() as u32).next_power_of_two();
     let mut plan = Plan::default();
     let winners = winners_bracket(&mut plan, size);
-    let semifinals = winners.len().checked_sub(2).and_then(|i| winners.get(i));
-    if let (Bronze::Match, Some(semifinals)) = (bronze, semifinals) {
-        plan.push_round(
-            Bracket::Bronze,
-            1,
-            [[
-                Source::Loser(semifinals.get(0)),
-                Source::Loser(semifinals.get(1)),
-            ]],
-        );
+    let from_end = |n: usize| winners.len().checked_sub(n).and_then(|i| winners.get(i));
+    match (bronze, from_end(3), from_end(2)) {
+        (Bronze::Match, _, Some(semifinals)) => {
+            plan.push_round(
+                Bracket::Bronze,
+                1,
+                [[
+                    Source::Loser(semifinals.get(0)),
+                    Source::Loser(semifinals.get(1)),
+                ]],
+            );
+        }
+        (Bronze::Repechage, Some(quarterfinals), Some(semifinals)) => {
+            let loser = |p: u32| Source::Loser(quarterfinals.get(p));
+            let repechage = plan.push_round(
+                Bracket::Repechage,
+                1,
+                [[loser(0), loser(1)], [loser(2), loser(3)]],
+            );
+            // Each repechage winner meets the semifinal loser from the
+            // other half, so that two entrants do not meet twice.
+            plan.push_round(
+                Bracket::Bronze,
+                1,
+                [
+                    [
+                        Source::Winner(repechage.get(0)),
+                        Source::Loser(semifinals.get(1)),
+                    ],
+                    [
+                        Source::Winner(repechage.get(1)),
+                        Source::Loser(semifinals.get(0)),
+                    ],
+                ],
+            );
+        }
+        _ => {}
     }
     remove_byes(plan.0, entrants)
 }
