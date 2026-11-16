@@ -435,3 +435,153 @@ fn bronze_match_needs_4_entrants() {
     assert_eq!(Tournament::create(setup(3)), Err(Error::TooFewEntrants));
     assert!(Tournament::create(setup(4)).is_ok());
 }
+
+fn repechage() -> Format {
+    Format::SingleElimination {
+        bronze: Bronze::Repechage,
+    }
+}
+
+const REP: Bracket = Bracket::Repechage;
+const BR: Bracket = Bracket::Bronze;
+
+/// Checks a single elimination graph with repechage: `winners` in the
+/// winners bracket, then `rest` in the repechage and bronze brackets.
+fn assert_repechage_graph(
+    count: u64,
+    round_count: u32,
+    winners: &[(u32, u32, [Source; 2])],
+    rest: &[(Bracket, u32, u32, [Source; 2])],
+) {
+    let tournament = create_with(repechage(), count);
+    assert_eq!(tournament.round_count(Bracket::Winners), round_count);
+    let mut expected: Vec<_> = winners
+        .iter()
+        .map(|(round, position, sources)| (Bracket::Winners, *round, *position, sources.clone()))
+        .collect();
+    expected.extend_from_slice(rest);
+    assert_eq!(graph(&tournament), expected);
+}
+
+#[test]
+fn repechage_graph_for_5_entrants() {
+    // Byes remove three quarterfinals. Both repechage matches go, and so
+    // does the bronze match of semifinal 0's loser.
+    assert_repechage_graph(
+        5,
+        3,
+        &[
+            (1, 1, [seed(4), seed(5)]),
+            (2, 0, [seed(1), winner(0)]),
+            (2, 1, [seed(2), seed(3)]),
+            (3, 0, [winner(1), winner(2)]),
+        ],
+        &[(BR, 1, 0, [loser(0), loser(2)])],
+    );
+}
+
+#[test]
+fn repechage_graph_for_6_entrants() {
+    // Byes remove both repechage matches, so a quarterfinal loser goes
+    // straight to each bronze match.
+    assert_repechage_graph(
+        6,
+        3,
+        &[
+            (1, 1, [seed(4), seed(5)]),
+            (1, 3, [seed(3), seed(6)]),
+            (2, 0, [seed(1), winner(0)]),
+            (2, 1, [seed(2), winner(1)]),
+            (3, 0, [winner(2), winner(3)]),
+        ],
+        &[
+            (BR, 1, 0, [loser(0), loser(3)]),
+            (BR, 1, 1, [loser(1), loser(2)]),
+        ],
+    );
+}
+
+#[test]
+fn repechage_graph_for_7_entrants() {
+    assert_repechage_graph(
+        7,
+        3,
+        &[
+            (1, 1, [seed(4), seed(5)]),
+            (1, 2, [seed(2), seed(7)]),
+            (1, 3, [seed(3), seed(6)]),
+            (2, 0, [seed(1), winner(0)]),
+            (2, 1, [winner(1), winner(2)]),
+            (3, 0, [winner(3), winner(4)]),
+        ],
+        &[
+            (REP, 1, 1, [loser(1), loser(2)]),
+            (BR, 1, 0, [loser(0), loser(4)]),
+            (BR, 1, 1, [winner(6), loser(3)]),
+        ],
+    );
+}
+
+#[test]
+fn repechage_graph_for_8_entrants() {
+    assert_repechage_graph(
+        8,
+        3,
+        &[
+            (1, 0, [seed(1), seed(8)]),
+            (1, 1, [seed(4), seed(5)]),
+            (1, 2, [seed(2), seed(7)]),
+            (1, 3, [seed(3), seed(6)]),
+            (2, 0, [winner(0), winner(1)]),
+            (2, 1, [winner(2), winner(3)]),
+            (3, 0, [winner(4), winner(5)]),
+        ],
+        &[
+            (REP, 1, 0, [loser(0), loser(1)]),
+            (REP, 1, 1, [loser(2), loser(3)]),
+            (BR, 1, 0, [winner(7), loser(5)]),
+            (BR, 1, 1, [winner(8), loser(4)]),
+        ],
+    );
+}
+
+#[test]
+fn repechage_graph_for_16_entrants() {
+    assert_repechage_graph(
+        16,
+        4,
+        &[
+            (1, 0, [seed(1), seed(16)]),
+            (1, 1, [seed(8), seed(9)]),
+            (1, 2, [seed(4), seed(13)]),
+            (1, 3, [seed(5), seed(12)]),
+            (1, 4, [seed(2), seed(15)]),
+            (1, 5, [seed(7), seed(10)]),
+            (1, 6, [seed(3), seed(14)]),
+            (1, 7, [seed(6), seed(11)]),
+            (2, 0, [winner(0), winner(1)]),
+            (2, 1, [winner(2), winner(3)]),
+            (2, 2, [winner(4), winner(5)]),
+            (2, 3, [winner(6), winner(7)]),
+            (3, 0, [winner(8), winner(9)]),
+            (3, 1, [winner(10), winner(11)]),
+            (4, 0, [winner(12), winner(13)]),
+        ],
+        &[
+            (REP, 1, 0, [loser(8), loser(9)]),
+            (REP, 1, 1, [loser(10), loser(11)]),
+            (BR, 1, 0, [winner(15), loser(13)]),
+            (BR, 1, 1, [winner(16), loser(12)]),
+        ],
+    );
+}
+
+#[test]
+fn repechage_needs_5_entrants() {
+    let setup = |count: u64| Setup {
+        format: repechage(),
+        entrants: (1..=count).map(EntrantId).collect(),
+    };
+    assert_eq!(Tournament::create(setup(4)), Err(Error::TooFewEntrants));
+    assert!(Tournament::create(setup(5)).is_ok());
+}

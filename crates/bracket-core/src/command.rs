@@ -41,7 +41,7 @@ pub enum Event {
         entrant: EntrantId,
     },
     /// A result ended the tournament: in single elimination, the last result
-    /// among the final and the bronze match; in double elimination, the
+    /// among the final and the bronze matches; in double elimination, the
     /// result of the grand final or the reset; in round robin, the result of
     /// the last match without one.
     Completed {

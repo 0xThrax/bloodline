@@ -62,6 +62,14 @@ pub enum Bronze {
     /// The two semifinal losers play for third place in [`Bracket::Bronze`].
     /// Needs at least 4 entrants.
     Match,
+    /// The losers of the quarterfinals get a second chance, and two
+    /// entrants take third place.
+    ///
+    /// In [`Bracket::Repechage`], the quarterfinal losers of each half of
+    /// the bracket play each other. In [`Bracket::Bronze`], the winner of
+    /// each repechage match plays the semifinal loser from the other half.
+    /// Needs at least 5 entrants, so that the quarterfinals exist.
+    Repechage,
 }
 
 /// The points an entrant earns for a win, a draw, and a loss in round robin.
@@ -102,8 +110,8 @@ pub struct Setup {
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[non_exhaustive]
 pub enum Bracket {
-    /// The main bracket. Every single elimination match but the bronze
-    /// match is here.
+    /// The main bracket. Every single elimination match but the repechage
+    /// and bronze matches is here.
     Winners,
     /// The bracket that losers of winners bracket matches drop into.
     Losers,
@@ -111,7 +119,10 @@ pub enum Bracket {
     GrandFinal,
     /// The group of a round robin. Every round robin match is here.
     Group,
-    /// The match for third place in single elimination.
+    /// The matches between quarterfinal losers in single elimination with
+    /// [`Bronze::Repechage`].
+    Repechage,
+    /// The matches for third place in single elimination.
     Bronze,
 }
 
