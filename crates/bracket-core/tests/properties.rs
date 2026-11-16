@@ -2,8 +2,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::ops::RangeInclusive;
 
 use bracket_core::{
-    Bracket, Bronze, Command, EntrantId, Error, Event, Format, MatchId, MatchResult, Points, Setup,
-    Side, Source, Status, Tournament,
+    Bracket, Bronze, Command, EntrantId, Error, Event, Format, MatchId, MatchResult, Placement,
+    Points, Setup, Side, Source, Status, Tournament,
 };
 use proptest::prelude::*;
 use proptest::sample::Index;
@@ -408,6 +408,68 @@ fn check_completes_with_bronze(setup: Setup, picks: &[Pick]) -> Result<(), TestC
             Side::B => Side::A,
         };
         prop_assert!(entrant_on(m, loser) != champion, "{:?}", m.id());
+    }
+    Ok(())
+}
+
+/// The places that `format` gives `count` entrants once it completes.
+fn expected_places(format: &Format, count: usize) -> Vec<u32> {
+    match format {
+        Format::SingleElimination {
+            bronze: Bronze::Match,
+        } => vec![1, 2, 3, 4],
+        // Byes remove one bronze match with 5 entrants.
+        Format::SingleElimination {
+            bronze: Bronze::Repechage,
+        } if count == 5 => vec![1, 2, 3, 3, 5],
+        Format::SingleElimination {
+            bronze: Bronze::Repechage,
+        } => vec![1, 2, 3, 3, 5, 5],
+        // Two entrants have no semifinal, and three have one.
+        Format::SingleElimination { .. } => [1, 2, 3, 3].into_iter().take(count.min(4)).collect(),
+        Format::DoubleElimination => [1, 2, 3].into_iter().take(count.min(3)).collect(),
+        _ => (1..=count as u32).collect(),
+    }
+}
+
+/// Checks that each entrant has at most one place and that the places are
+/// in order.
+fn check_one_place_each(placements: &[Placement]) -> Result<(), TestCaseError> {
+    let entrants: BTreeSet<EntrantId> = placements.iter().map(|p| p.entrant).collect();
+    prop_assert_eq!(entrants.len(), placements.len());
+    prop_assert!(placements.is_sorted_by_key(|p| p.place));
+    Ok(())
+}
+
+/// Checks property 3 over a run: each entrant has at most one place, a
+/// decided place never changes, and the places at the end follow the table
+/// in `Tournament::placements`.
+fn check_placements(setup: Setup, picks: &[Pick]) -> Result<(), TestCaseError> {
+    let format = setup.format.clone();
+    let count = setup.entrants.len();
+    let mut decided: Vec<Placement> = Vec::new();
+    let (tournament, _) = run(setup, picks, |tournament, _, _| {
+        let placements = tournament.placements();
+        check_one_place_each(&placements)?;
+        for placement in &decided {
+            prop_assert!(placements.contains(placement), "{:?} changed", placement);
+        }
+        decided = placements;
+        Ok(())
+    })?;
+    let placements = tournament.placements();
+    check_one_place_each(&placements)?;
+    let places: Vec<u32> = placements.iter().map(|p| p.place).collect();
+    prop_assert_eq!(places, expected_places(&format, count));
+    let Status::Complete { champion } = tournament.status() else {
+        return Err(TestCaseError::fail("the run did not complete"));
+    };
+    prop_assert_eq!(placements[0].entrant, champion);
+    if let Some(standings) = tournament.standings() {
+        let ranks: Vec<(u32, EntrantId)> = standings.iter().map(|s| (s.rank, s.entrant)).collect();
+        let places: Vec<(u32, EntrantId)> =
+            placements.iter().map(|p| (p.place, p.entrant)).collect();
+        prop_assert_eq!(places, ranks);
     }
     Ok(())
 }
@@ -860,5 +922,30 @@ proptest! {
     #[test]
     fn repechage_ready_matches_are_the_reportable_ones((setup, picks) in runs(REPECHAGE)) {
         check_ready_matches(setup, &picks)?;
+    }
+
+    #[test]
+    fn placements_follow_the_table((setup, picks) in runs(SINGLE)) {
+        check_placements(setup, &picks)?;
+    }
+
+    #[test]
+    fn bronze_placements_follow_the_table((setup, picks) in runs(BRONZE)) {
+        check_placements(setup, &picks)?;
+    }
+
+    #[test]
+    fn repechage_placements_follow_the_table((setup, picks) in runs(REPECHAGE)) {
+        check_placements(setup, &picks)?;
+    }
+
+    #[test]
+    fn double_placements_follow_the_table((setup, picks) in runs(DOUBLE)) {
+        check_placements(setup, &picks)?;
+    }
+
+    #[test]
+    fn round_robin_placements_follow_the_table((setup, picks) in runs(round_robin())) {
+        check_placements(setup, &picks)?;
     }
 }

@@ -229,6 +229,11 @@ impl Match {
     pub(crate) fn winner(&self) -> Option<EntrantId> {
         self.slots[self.result.as_ref()?.winner?.index()].entrant
     }
+
+    pub(crate) fn loser(&self) -> Option<EntrantId> {
+        let winner = self.result.as_ref()?.winner?;
+        self.slots[1 - winner.index()].entrant
+    }
 }
 
 /// Whether a tournament has a champion.
@@ -244,6 +249,16 @@ pub enum Status {
         /// with rank 1 once every round robin match has a result.
         champion: EntrantId,
     },
+}
+
+/// The final place of one entrant.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+pub struct Placement {
+    /// The 1-based place. Two entrants can share a place.
+    pub place: u32,
+    /// The entrant.
+    pub entrant: EntrantId,
 }
 
 /// The place of one entrant in a round robin, from the results reported so far.
