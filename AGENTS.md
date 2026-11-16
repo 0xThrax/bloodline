@@ -20,16 +20,45 @@ While iterating, run one test file with `cargo test -p bracket-core --test <name
 
 ## Scope
 
-Work on one roadmap phase at a time, from its tracking issue. Do not build ahead: no types, parameters, or modules for later phases. When a phase lands, tick it in `ARCHITECTURE.md` in the same pull request.
+Work on one roadmap phase at a time, from its tracking issue (see "Handoff between sessions"). Do not build ahead: no types, parameters, or modules for later phases. When a phase lands, tick it in `ARCHITECTURE.md` in the same pull request.
+
+## Project state
+
+Sessions do not share memory. The project state lives in the repository and in GitHub. Every session reads it there and writes it back there.
+
+- Direction: the "Roadmap" section of `ARCHITECTURE.md`. Each phase has a tracking issue.
+- Active work: the open issues with the `tracking` label. One tracking issue holds one piece of work that takes more than one pull request.
+- At the start of a session, if the user has not named a task, run the `catchup` skill.
 
 ## Handoff between sessions
 
-A phase can take more than one session and more than one pull request. The tracking issue holds the state between sessions.
-
-- Before you start, read the tracking issue and all of its comments. The newest `## Handoff` comment lists the steps, the decisions that change the spec, and the next step.
+- Work that takes more than one pull request gets a tracking issue with the `tracking` label before the first pull request. Work that fits in one pull request needs no issue.
+- Before you start, read the tracking issue and all of its comments. The newest `## Handoff` comment lists the steps, the decisions that change the plan, and the next step.
 - Do only the next step from that comment.
-- When your pull request is open, post a new `## Handoff` comment on the issue. Use the same format as the last one: tick your step and link the pull request, keep the decisions current, and describe the next step.
-- If there is no `## Handoff` comment, split the phase into steps that are one pull request each. Post the first `## Handoff` comment before you start.
+- Put `Part of #<issue>` in the pull request body.
+- When your pull request is open, post a new `## Handoff` comment on the issue. Use the same format as the last one: tick your step and link the pull request, keep the decisions current, and describe the next step. Do not add a footer.
+- If there is no `## Handoff` comment, split the work into steps that are one pull request each. Post the first `## Handoff` comment before you start.
+- When the last step lands, tick the item in the roadmap in the same pull request, and close the issue.
+- Use `gh api` (the REST API) for issues and pull requests. Cloud sessions block GraphQL, so `gh issue` and `gh pr` subcommands can fail there. To post a comment, write the body to a file in `/tmp` and run `gh api "repos/{owner}/{repo}/issues/<n>/comments" -F body=@/tmp/handoff.md`.
+
+The handoff comment has this format:
+
+```markdown
+## Handoff
+
+### Steps
+
+- [x] 1. <step>. #<pull request>
+- [ ] 2. <step>
+
+### Decisions
+
+- <a decision or a difference from the plan, and why>
+
+### Next step
+
+<what the next session does first>
+```
 
 ## What belongs in the repository
 

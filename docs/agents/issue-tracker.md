@@ -4,6 +4,8 @@ Issues and specs for this repo live as GitHub issues. Use the `gh` CLI for all o
 
 ## Conventions
 
+**Cloud sessions:** GitHub blocks GraphQL in Claude Code cloud sessions. There, `gh issue` and `gh pr` subcommands fail with HTTP 403. Use the REST API through `gh api` instead, for example `gh api "repos/{owner}/{repo}/issues?state=open"`, `gh api "repos/{owner}/{repo}/issues/<n>/comments" -F body=@/tmp/body.md`, and `gh api "repos/{owner}/{repo}/issues/<n>" -X PATCH -f state=closed`.
+
 - **Create an issue**: `gh issue create --title "..." --body "..."`. Use a heredoc for multi-line bodies.
 - **Read an issue**: `gh issue view <number> --json number,title,body,labels,comments`.
 - **List issues**: `gh issue list --state open --json number,title,body,labels,comments --jq '[.[] | {number, title, body, labels: [.labels[].name], comments: [.comments[].body]}]'` with appropriate `--label` and `--state` filters.
