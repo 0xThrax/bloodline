@@ -3,8 +3,8 @@ use std::collections::BTreeSet;
 use crate::graph::{self, MAX_ELIMINATION_ENTRANTS, MAX_ROUND_ROBIN_ENTRANTS};
 use crate::standings;
 use crate::{
-    Bracket, Command, EntrantId, Error, Event, Format, Match, MatchId, MatchResult, Setup, Side,
-    Source, Standing, Status,
+    Bracket, Bronze, Command, EntrantId, Error, Event, Format, Match, MatchId, MatchResult,
+    Placement, Setup, Side, Source, Standing, Status,
 };
 
 /// A tournament: its setup and the current state of every match.
@@ -157,20 +157,7 @@ impl Tournament {
                 let complete = deciding.clone().all(|m| m.result.is_some());
                 deciding.next().filter(|_| complete).and_then(Match::winner)
             }
-            // Only the reset, or the grand final just before it, can end a
-            // double elimination tournament.
-            Format::DoubleElimination => self
-                .matches
-                .iter()
-                .rev()
-                .take(2)
-                .find(|m| {
-                    m.result
-                        .as_ref()
-                        .and_then(|result| result.winner)
-                        .is_some_and(|winner| self.ends_tournament(m, winner))
-                })
-                .and_then(Match::winner),
+            Format::DoubleElimination => self.double_elimination_end().and_then(Match::winner),
             Format::RoundRobin { .. } => {
                 if self.matches.iter().any(|m| m.result.is_none()) {
                     return Status::InProgress;
@@ -204,6 +191,98 @@ impl Tournament {
             points,
             self.results(),
         ))
+    }
+
+    /// The places decided so far, ordered by place, then by the id of the
+    /// match that decided each place.
+    ///
+    /// | Format | Places |
+    /// | --- | --- |
+    /// | Single elimination, [`Bronze::None`] | 1 final winner, 2 final loser, 3 both semifinal losers |
+    /// | Single elimination, [`Bronze::Match`] | 1, 2, 3 bronze winner, 4 bronze loser |
+    /// | Single elimination, [`Bronze::Repechage`] | 1, 2, 3 both bronze winners, 5 both bronze losers |
+    /// | Double elimination | 1 champion, 2 the other finalist, 3 losers final loser |
+    /// | Round robin | every rank, after the last result |
+    ///
+    /// A place is decided when the match that decides it has a result.
+    /// Places without a match are skipped: with two entrants there are no
+    /// semifinals, so there is no place 3. With [`Bronze::Repechage`] and 5
+    /// entrants, byes remove one bronze match, and the semifinal loser who
+    /// would play it takes place 3 when the semifinal has a result.
+    pub fn placements(&self) -> Vec<Placement> {
+        let mut decided: Vec<(u32, MatchId, EntrantId)> = Vec::new();
+        let mut place = |place: u32, m: &Match, entrant: Option<EntrantId>| {
+            decided.extend(entrant.map(|entrant| (place, m.id, entrant)));
+        };
+        match &self.setup.format {
+            Format::SingleElimination { bronze } => {
+                let mut deciding = self.final_and_bronze();
+                if let Some(final_match) = deciding.next() {
+                    place(1, final_match, final_match.winner());
+                    place(2, final_match, final_match.loser());
+                }
+                let bronze_loser = match bronze {
+                    Bronze::Repechage => 5,
+                    _ => 4,
+                };
+                for m in deciding {
+                    place(3, m, m.winner());
+                    place(bronze_loser, m, m.loser());
+                }
+                // A semifinal loser who feeds no later match is out of the
+                // tournament: with no bronze match, or with a bronze match
+                // that byes removed.
+                let semifinal_round = self.round_count(Bracket::Winners).saturating_sub(1);
+                for m in self.matches.iter().filter(|m| {
+                    m.bracket == Bracket::Winners
+                        && m.round == semifinal_round
+                        && self.slot_fed_by(&Source::Loser(m.id)).is_none()
+                }) {
+                    place(3, m, m.loser());
+                }
+            }
+            Format::DoubleElimination => {
+                if let Some(end) = self.double_elimination_end() {
+                    place(1, end, end.winner());
+                    place(2, end, end.loser());
+                }
+                let losers_final = self.matches.iter().rfind(|m| m.bracket == Bracket::Losers);
+                if let Some(losers_final) = losers_final {
+                    place(3, losers_final, losers_final.loser());
+                }
+            }
+            Format::RoundRobin { .. } => {
+                if self.status() == Status::InProgress {
+                    return Vec::new();
+                }
+                return self
+                    .standings()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|standing| Placement {
+                        place: standing.rank,
+                        entrant: standing.entrant,
+                    })
+                    .collect();
+            }
+        }
+        decided.sort_by_key(|&(place, id, _)| (place, id));
+        decided
+            .into_iter()
+            .map(|(place, _, entrant)| Placement { place, entrant })
+            .collect()
+    }
+
+    /// The match whose result ended a double elimination tournament, if any.
+    ///
+    /// Only the reset, or the grand final just before it, can end it.
+    fn double_elimination_end(&self) -> Option<&Match> {
+        self.matches.iter().rev().take(2).find(|m| {
+            m.result
+                .as_ref()
+                .and_then(|result| result.winner)
+                .is_some_and(|winner| self.ends_tournament(m, winner))
+        })
     }
 
     /// The round robin entrant of rank 1 with every reported result, plus
